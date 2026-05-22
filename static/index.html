@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPS 信号模拟器控制中心</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,700;1,300&family=Montserrat:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <!-- Leaflet.js Dark Mode Maps -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <!-- Project Stylesheet -->
+    <link rel="stylesheet" href="app.css">
+</head>
+<body>
+    <div class="glass-bg"></div>
+    <div class="app-container">
+        
+        <!-- HEADER SECTION -->
+        <header class="app-header">
+            <div class="logo-area">
+                <div class="logo-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <circle cx="12" cy="12" r="6"></circle>
+                        <circle cx="12" cy="12" r="2"></circle>
+                    </svg>
+                </div>
+                <div class="logo-text">
+                    <h1>GPS SIMULATOR</h1>
+                    <p>HACKRF ONE SIGNAL TEST CONSOLE</p>
+                </div>
+            </div>
+            
+            <div class="status-panel">
+                <!-- Device Connections -->
+                <div class="status-badge" id="hackrf-badge">
+                    <div class="indicator gray" id="hackrf-indicator"></div>
+                    <span class="badge-label">HACKRF ONE:</span>
+                    <span class="badge-value" id="hackrf-val">检测中...</span>
+                </div>
+                
+                <div class="status-badge" id="tcxo-badge">
+                    <div class="indicator gray" id="tcxo-indicator"></div>
+                    <span class="badge-label">10MHz TCXO:</span>
+                    <span class="badge-value" id="tcxo-val">检测中...</span>
+                </div>
+
+                <!-- Simulation Status -->
+                <div class="status-badge pulse-badge" id="sim-badge">
+                    <div class="indicator green pulse" id="sim-indicator"></div>
+                    <span class="badge-label">工作状态:</span>
+                    <span class="badge-value highlight" id="sim-val">空闲 (IDLE)</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- MAIN LAYOUT -->
+        <main class="app-grid">
+            
+            <!-- LEFT COLUMN: CONTROLS -->
+            <section class="panel panel-left glass-card">
+                <div class="panel-header">
+                    <h2>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-dasharray="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                            <line x1="9" y1="3" x2="9" y2="21"></line>
+                            <line x1="9" y1="9" x2="21" y2="9"></line>
+                            <line x1="9" y1="15" x2="21" y2="15"></line>
+                        </svg>
+                        参数配置控制台
+                    </h2>
+                </div>
+                
+                <div class="panel-body">
+                    <!-- Address Search -->
+                    <div class="form-group search-group">
+                        <label for="address-search">全球地址搜索 (Nominatim)</label>
+                        <div class="search-input-wrapper">
+                            <input type="text" id="address-search" placeholder="输入你想定位的地址，如：北京市天安门广场" autocomplete="off">
+                            <button id="btn-search" class="btn btn-secondary">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="11" cy="11" r="8"></circle>
+                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                </svg>
+                            </button>
+                        </div>
+                        <ul class="search-results hidden" id="search-results"></ul>
+                    </div>
+
+                    <!-- Coordinates Grid -->
+                    <div class="coordinates-grid">
+                        <div class="form-group">
+                            <label for="input-lat">纬度 (Latitude)</label>
+                            <input type="number" id="input-lat" step="0.000001" min="-90" max="90" value="39.904200" placeholder="39.9042">
+                        </div>
+                        <div class="form-group">
+                            <label for="input-lng">经度 (Longitude)</label>
+                            <input type="number" id="input-lng" step="0.000001" min="-180" max="180" value="116.407400" placeholder="116.4074">
+                        </div>
+                        <div class="form-group full-width">
+                            <label for="input-alt">天线海拔高度 (Altitude - 米)</label>
+                            <div class="input-unit-wrapper">
+                                <input type="number" id="input-alt" step="1" value="100" placeholder="100">
+                                <span class="unit">M</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Setup & Configuration -->
+                    <div class="simulation-settings">
+                        <!-- Ephemeris -->
+                        <div class="form-group">
+                            <label for="select-ephemeris">GPS 星历数据文件 (Daily Ephemeris)</label>
+                            <div class="select-button-wrapper">
+                                <select id="select-ephemeris">
+                                    <option value="" disabled selected>读取星历列表中...</option>
+                                </select>
+                                <button id="btn-ephemeris-refresh" class="btn btn-icon" title="刷新列表">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <polyline points="23 4 23 10 17 10"></polyline>
+                                        <polyline points="1 20 1 14 7 14"></polyline>
+                                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                            
+                            <!-- Ephemeris Actions -->
+                            <div class="ephemeris-actions">
+                                <button id="btn-download-ephemeris" class="btn btn-action btn-sm">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                        <polyline points="7 10 12 15 17 10"></polyline>
+                                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                                    </svg>
+                                    自动拉取今日星历
+                                </button>
+                                
+                                <div class="upload-wrapper">
+                                    <input type="file" id="ephemeris-upload" class="hidden-upload" accept=".n,.brdc">
+                                    <button id="btn-upload-trigger" class="btn btn-action btn-sm">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                            <polyline points="17 8 12 3 7 8"></polyline>
+                                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                                        </svg>
+                                        手动上传星历
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Duration & RF Gain -->
+                        <div class="settings-grid">
+                            <div class="form-group">
+                                <label for="input-duration">持续模拟时长 (Duration)</label>
+                                <div class="input-unit-wrapper">
+                                    <input type="number" id="input-duration" min="30" max="3600" value="300">
+                                    <span class="unit">秒</span>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label for="input-gain">发射增益 (TX Gain)</label>
+                                <div class="input-unit-wrapper">
+                                    <input type="number" id="input-gain" min="0" max="47" value="30">
+                                    <span class="unit">dB</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- CONTROL BUTTONS -->
+                    <div class="control-actions">
+                        <button id="btn-start" class="btn btn-primary btn-large">
+                            <span class="btn-glow"></span>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                            </svg>
+                            启动 GPS 信号模拟
+                        </button>
+                        <button id="btn-stop" class="btn btn-danger btn-large" disabled>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
+                            </svg>
+                            强制终止发射
+                        </button>
+                    </div>
+
+                    <!-- SETUP UTILITIES -->
+                    <div class="setup-utilities-area">
+                        <div class="alert-info hidden" id="gps-sim-missing-alert">
+                            <div class="alert-icon">⚠️</div>
+                            <div class="alert-content">
+                                <h3>系统缺少 <code>gps-sdr-sim</code> 信号生成组件</h3>
+                                <p>检测到您的服务器尚未编译信号生成组件，点击下方按钮一键安装编译依赖。</p>
+                                <button id="btn-system-setup" class="btn btn-warning btn-sm">一键编译并配置环境</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- RIGHT COLUMN: MAP & WEB TERMINAL -->
+            <section class="panel panel-right">
+                
+                <!-- TOP CARD: MAP -->
+                <div class="panel-map-card glass-card">
+                    <div id="map"></div>
+                    <div class="map-overlay-coordinates">
+                        <strong>当前选点：</strong>
+                        <span id="overlay-lat">39.904200</span>, <span id="overlay-lng">116.407400</span>
+                    </div>
+                </div>
+                
+                <!-- BOTTOM CARD: CONSOLE WEB TERMINAL -->
+                <div class="panel-console-card glass-card">
+                    <div class="panel-header console-header">
+                        <h2>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="4 17 10 11 4 5"></polyline>
+                                <line x1="12" y1="19" x2="20" y2="19"></line>
+                            </svg>
+                            实时发射控制台日志 (SSE Live Stream)
+                        </h2>
+                        <div class="console-actions">
+                            <button id="btn-console-clear" class="btn btn-secondary btn-xs">清屏</button>
+                            <div class="terminal-dot red"></div>
+                            <div class="terminal-dot yellow"></div>
+                            <div class="terminal-dot green"></div>
+                        </div>
+                    </div>
+                    <div class="terminal-body" id="terminal-output">
+                        <div class="terminal-line system-line">[SYSTEM] 控制中心连接就绪，等待获取服务器状态...</div>
+                    </div>
+                </div>
+
+            </section>
+
+        </main>
+        
+        <!-- FOOTER & LEGAL -->
+        <footer class="app-footer">
+            <p>© 2026 HackRF Toys | GPS Signal Simulator Console</p>
+            <p class="legal-notice">⚠️ <strong>法律与合规警示：</strong> GPS 信号欺骗/模拟具有极高风险，干扰空中导航及公众通信属违法行为。请确保在受屏蔽测试环境（如暗室、法拉第电笼）或通过同轴线缆物理直接连接（加衰减器）进行模拟测试，切勿进行天线露天发射！</p>
+        </footer>
+
+    </div>
+
+    <!-- SECURITY ACCESS TOKEN MODAL -->
+    <div class="modal-overlay hidden" id="token-modal">
+        <div class="modal-card glass-card">
+            <div class="modal-header-sec">
+                <div class="lock-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                    </svg>
+                </div>
+                <h2>安全访问授权认证</h2>
+                <p>后端控制台已启用安全访问控制，请输入您的授权访问 Token 凭证以解锁设备管理面板。</p>
+            </div>
+            <div class="modal-body">
+                <div class="form-group password-group">
+                    <label for="token-input">安全访问 Token (Access Token)</label>
+                    <div class="input-unit-wrapper">
+                        <input type="password" id="token-input" placeholder="输入控制台访问 Token" autocomplete="current-password">
+                        <span class="btn-toggle-password" id="btn-toggle-password">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="eye-icon">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                        </span>
+                    </div>
+                    <p class="error-text hidden" id="token-error">⚠️ 访问 Token 错误或已失效，请重新输入！</p>
+                </div>
+                <button id="btn-token-submit" class="btn btn-primary btn-large full-width">
+                    验证并进入控制台
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Project Script -->
+    <script src="app.js"></script>
+</body>
+</html>
