@@ -1,0 +1,73 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Package
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout repository code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. Setup Go environment (Use the latest stable version to satisfy go.mod)
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: true
+
+      # 3. Run cross-platform packaging script
+      - name: Compile and Package Artifacts
+        run: |
+          chmod +x build_package.sh
+          ./build_package.sh all
+
+      # 4. Upload build products as workflow artifacts (Available for all push events)
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gps-simulator-packages
+          path: |
+            dist/gps-simulator-linux-amd64.tar.gz
+            dist/gps-simulator-windows-amd64.zip
+          retention-days: 14
+
+      # 5. Create GitHub Release & Upload Assets (Only on version tags v*)
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/gps-simulator-linux-amd64.tar.gz
+            dist/gps-simulator-windows-amd64.zip
+          name: Release ${{ github.ref_name }}
+          body: |
+            🛰️ **GPS Signal Simulator Web Console - Release ${{ github.ref_name }}**
+            
+            This release contains automatically compiled portable packages for both Ubuntu (Linux) and Windows 11 (amd64).
+            
+            ### 📦 Included Packages
+            * **Windows 11 (amd64)**: `gps-simulator-windows-amd64.zip` (Includes `gps-simulator.exe` and default ephemeris)
+            * **Ubuntu Server (amd64)**: `gps-simulator-linux-amd64.tar.gz` (Includes `gps-simulator` binary and default ephemeris)
+            
+            ### 🔧 Installation & Deployment
+            * For Windows deployment details, please check **[README_Windows.md](README_Windows.md)**.
+            * For Linux deployment details, please check **[README.md](README.md)**.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

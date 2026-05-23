@@ -1,6 +1,6 @@
 # 🛰️ GPS Signal Simulator (基于 HackRF One 的 GPS 信号模拟测试工具)
 
-这是一个专为 **HackRF One** 设备和 **Ubuntu Server** 硬件测试环境设计的、**高颜值、极简部署**的 GPS 信号模拟测试工具。
+这是一个专为 **HackRF One** 设备设计的、全面兼容 **Ubuntu Server 与 Windows 11** 测试环境的、**高颜值、极简部署**的 GPS 信号模拟测试工具。
 
 系统采用 **Go 语言 + 嵌入式 Web 网页** 设计，可以编译成单个二进制可执行程序。您只需在 Ubuntu Server 上运行此单文件，即可在局域网内用任何设备的浏览器访问管理后台，完成“地图选点 ➡️ 自动下载星历 ➡️ 自动生成基带 ➡️ 一键发射 GPS 信号”的全生命周期控制。
 
@@ -44,26 +44,62 @@ sudo apt install -y git build-essential libfftw3-dev hackrf
 
 ## 🚀 编译与部署
 
-本项目支持跨平台编译。由于目标环境为 **Ubuntu Server**，而您的开发环境可能在 **macOS**，您可以在 macOS 上非常简单地交叉编译出适用于 Linux 平台的单文件。
+本项目支持跨平台编译，可生成适用于 **Ubuntu Server (Linux)** 和 **Windows 11** 的单文件便携式程序。
 
-### 1. 本地直接编译运行 (Mac 调试使用)
+> [!TIP]
+> **Windows 11 用户快速指引**：如果您使用的是 Windows 11 环境，请阅读专用的 **[README_Windows.md](README_Windows.md)** 获取 Zadig 驱动替换及 PothosSDR 工具链的完整配置指南。
+
+### 📦 1. 一键本地编译与便携化打包
+
+为了方便您快速打包发布，项目在根目录下提供了自动化的本地打包脚本：
+
+*   **在 macOS / Linux 下打包**（支持交叉编译出 Linux 与 Windows amd64 便携包）：
+    ```bash
+    # 授予执行权限并运行打包脚本
+    chmod +x build_package.sh
+    ./build_package.sh all
+    ```
+    *运行结束后，打包好的便携文件将输出在 `dist/` 目录下：*
+    - `dist/gps-simulator-linux-amd64.tar.gz` (适用于 Ubuntu)
+    - `dist/gps-simulator-windows-amd64.zip` (适用于 Windows 11)
+
+*   **在 Windows 11 本地打包**（使用 PowerShell）：
+    ```powershell
+    # 运行 PowerShell 打包脚本
+    .\build_package.ps1
+    ```
+    *同样会在 `dist/` 目录下生成上述两套平台便携包。*
+
+---
+
+### 2. 本地调试与手动编译
+
+若您不需要完整打包，只需快速运行调试，可以执行标准 Go 命令：
+
+#### macOS / Linux 调试运行
 ```bash
-go build -o gps-simulator
+go build -o gps-simulator main.go
 ./gps-simulator
 ```
-打开浏览器访问：`http://localhost:8080`
 
-### 2. 交叉编译为 Linux 平台二进制文件 (部署到 Ubuntu Server)
-在项目根目录下，运行以下指令进行交叉编译：
-```bash
-GOOS=linux GOARCH=amd64 go build -o gps-simulator-linux
+#### Windows 11 调试运行
+```powershell
+go build -o gps-simulator.exe main.go
+.\gps-simulator.exe
 ```
-编译完成后，会在项目根目录生成 `gps-simulator-linux` 文件。
 
-### 3. 上传与部署
-使用 `scp` 或您常用的传输工具将 `gps-simulator-linux` 文件和内置的 `data/` 目录上传到您的 Ubuntu Server 上：
+#### 手动 Linux 交叉编译 (非打包)
 ```bash
-scp -r gps-simulator-linux data/ user@your-ubuntu-ip:~/hackrf-toys/
+GOOS=linux GOARCH=amd64 go build -o gps-simulator-linux main.go
+```
+
+---
+
+### 3. Linux 部署与上传
+使用 `scp` 或您常用的传输工具将打包好的 `gps-simulator-linux-amd64.tar.gz` 上传到您的 Ubuntu Server，并解压运行：
+```bash
+# 上传到服务器
+scp dist/gps-simulator-linux-amd64.tar.gz user@your-ubuntu-ip:~/
 ```
 
 ### 4. 在 Ubuntu Server 上启动运行
@@ -102,6 +138,21 @@ chmod +x gps-simulator-linux
 > `nohup ./gps-simulator-linux -token YourToken > server.log 2>&1 &`
 
 打开您电脑的浏览器，输入：`http://<您的 Ubuntu 服务器 IP>:8080` 即可开始使用！
+
+---
+
+## 🤖 GitHub Actions 自动化 CI/CD
+
+本项目已完整配置 **GitHub Actions** 自动化工作流。当您将代码推送至 GitHub 仓库后，系统将自动触发持续集成与构建：
+
+1. **自动构建与测试（Push 到 `main` 分支时）**：
+   - 每次有代码 push 或 PR 合并到 `main` 分支时，工作流会自动编译 Linux 与 Windows 版本的程序，并以 **Workflow Artifacts** 的形式发布。
+   - 您可以直接在 GitHub Actions 运行记录页面下载最新测试版的 `gps-simulator-packages` 压缩包。
+2. **自动发布版本（Push 版本标签 `v*` 时）**：
+   - 当您在本地为代码打上版本标签并推送至 GitHub（例如 `git tag v1.0.0` 且 `git push origin v1.0.0`）时，GitHub Actions 将自动执行生产打包。
+   - 并在 GitHub 仓库中**自动创建 Release 页面**，同时将 `gps-simulator-linux-amd64.tar.gz` 和 `gps-simulator-windows-amd64.zip` 作为 Release 附件上传供全球用户下载。
+
+工作流配置文件位于：[.github/workflows/release.yml](.github/workflows/release.yml)。
 
 ---
 

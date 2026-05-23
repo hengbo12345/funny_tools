@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -234,11 +235,15 @@ func main() {
 
 // findGpsSdrSim searches for gps-sdr-sim executable
 func findGpsSdrSim() string {
+	ext := ""
+	if runtime.GOOS == "windows" {
+		ext = ".exe"
+	}
 	paths := []string{
-		"./gps-sdr-sim",
-		"./bin/gps-sdr-sim",
-		"/usr/local/bin/gps-sdr-sim",
-		"/usr/bin/gps-sdr-sim",
+		"./gps-sdr-sim" + ext,
+		"./bin/gps-sdr-sim" + ext,
+		"/usr/local/bin/gps-sdr-sim" + ext,
+		"/usr/bin/gps-sdr-sim" + ext,
 	}
 	for _, p := range paths {
 		if info, err := os.Stat(p); err == nil && !info.IsDir() {
@@ -246,8 +251,13 @@ func findGpsSdrSim() string {
 		}
 	}
 	// Check standard PATH
-	if p, err := exec.LookPath("gps-sdr-sim"); err == nil {
+	if p, err := exec.LookPath("gps-sdr-sim" + ext); err == nil {
 		return p
+	}
+	if runtime.GOOS == "windows" {
+		if p, err := exec.LookPath("gps-sdr-sim"); err == nil {
+			return p
+		}
 	}
 	return ""
 }
@@ -280,6 +290,9 @@ func checkTcxoStatus(isTransmitting bool) string {
 	err := cmd.Run()
 	
 	if err != nil {
+		if runtime.GOOS == "windows" {
+			return "检测失败 (Windows 下未找到 hackrf_clock，请确保其已加入 PATH)"
+		}
 		return "检测失败 (未安装 hackrf_clock)"
 	}
 	
@@ -571,7 +584,7 @@ func handleSystemSetup(w http.ResponseWriter, r *http.Request) {
 
 func runSimulationFlow(gpsSimPath string, lat, lng, alt float64, duration, gain int, ephemeris string) {
 	ephemerisPath := filepath.Join("data/ephemeris", ephemeris)
-	binPath := "data/gps.bin"
+	binPath := filepath.Clean("data/gps.bin")
 
 	// Delete old file if exists
 	os.Remove(binPath)
@@ -826,6 +839,26 @@ func downloadAndExtractGz(url, zipFilename, destPath string) error {
 
 func triggerSystemSetup() {
 	logBroker.Broadcast("=================== 开始配置系统环境依赖 ===================")
+	
+	if runtime.GOOS == "windows" {
+		logBroker.Broadcast("检测到当前操作系统为 Windows 11。")
+		logBroker.Broadcast("Windows 环境下的 HackRF 工具链与编译依赖无法通过此程序自动一键安装。")
+		logBroker.Broadcast("请按照以下步骤手动进行配置：")
+		logBroker.Broadcast("----------------------------------------------------------")
+		logBroker.Broadcast("1. 安装 HackRF 硬件驱动：")
+		logBroker.Broadcast("   - 下载 Zadig 驱动工具 (https://zadig.akeo.ie/)。")
+		logBroker.Broadcast("   - 连接 HackRF One，将驱动成功替换/安装为 WinUSB。")
+		logBroker.Broadcast("2. 安装 Windows SDR 工具链 (包含 hackrf_transfer)：")
+		logBroker.Broadcast("   - 使用 Chocolatey 运行: choco install pothossdr")
+		logBroker.Broadcast("   - 或手动从 PothosSDR GitHub Releases 下载安装，并确保已将其 bin/ 目录加入系统环境变量 PATH。")
+		logBroker.Broadcast("3. 部署基带信号生成器 (gps-sdr-sim.exe)：")
+		logBroker.Broadcast("   - 从 https://github.com/osqzss/gps-sdr-sim/releases 下载编译好的 Windows 二进制文件。")
+		logBroker.Broadcast("   - 将解压出的 gps-sdr-sim.exe 复制到本软件所在的根目录下。")
+		logBroker.Broadcast("----------------------------------------------------------")
+		logBroker.Broadcast("配置详情可参阅项目自带 of README_Windows.md 手册。")
+		logBroker.Broadcast("=================== 依赖配置环境指南结束 ===================")
+		return
+	}
 	
 	// Check standard dependencies: gcc, git, make, libfftw3
 	logBroker.Broadcast("正在检查并安装基础包依赖 (apt-get)...")
