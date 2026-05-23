@@ -26,7 +26,7 @@ New-Item -Path $WindowsBuildPath -ItemType Directory -Force | Out-Null
 Write-Host "   [1/3] Compiling Go binary..."
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"
-go build -o (Join-Path $WindowsBuildPath "$AppName.exe") main.go
+go build -o (Join-Path $WindowsBuildPath "$AppName.exe") .
 
 Write-Host "   [2/3] Preparing assets..."
 Copy-Item -Path (Join-Path $WorkspaceDir "data") -Destination $WindowsBuildPath -Recurse -Force
@@ -51,7 +51,7 @@ New-Item -Path $LinuxBuildPath -ItemType Directory -Force | Out-Null
 Write-Host "   [1/3] Compiling Go binary..."
 $env:GOOS = "linux"
 $env:GOARCH = "amd64"
-go build -o (Join-Path $LinuxBuildPath $AppName) main.go
+go build -o (Join-Path $LinuxBuildPath $AppName) .
 
 Write-Host "   [2/3] Preparing assets..."
 Copy-Item -Path (Join-Path $WorkspaceDir "data") -Destination $LinuxBuildPath -Recurse -Force

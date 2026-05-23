@@ -141,6 +141,60 @@ chmod +x gps-simulator-linux
 
 ---
 
+## 🧱 软件架构与模块设计 (Software Architecture)
+
+为了保证代码的高可读性、高内聚性以及符合企业级常规开发规范，本项目对后端 Go 服务与前端 Web 控制台进行了彻底的模块化拆分，其文件组织拓扑结构如下：
+
+### 📂 项目目录树
+
+```text
+hackrf-toys/
+├── data/                    # 数据缓存目录
+│   └── ephemeris/           # RINEX 导航星历存储
+├── dist/                    # 编译打包成果输出目录
+├── static/                  # 嵌入式前端静态资源目录 (ES6 模块)
+│   ├── app.css              # 毛玻璃与极客接收仪科技感样式表
+│   ├── index.html           # 控制台单页面主骨架
+│   ├── app.js               # 前端应用总控入口与状态托管
+│   ├── auth.js              # 安全验证 Modal 与凭证校验器
+│   ├── api.js               # REST 请求与 EventSource 双工数据通道
+│   ├── map.js               # Leaflet.js 暗色地图选点与地理检索
+│   ├── telemetry.js         # GPSTest 板锁定徽章与 SNR 载噪比音柱图
+│   └── canvas.js            # Retina 高清 PSD 折线、时变瀑布及卫星极坐标雷达投影
+├── main.go                  # 后端入口：服务引导、路由映射与静态 FS 嵌入
+├── state.go                 # 实体与变量：星座字典、全局状态常量与同步锁
+├── auth.go                  # 安全控制器：Token 拦截器中间件
+├── broker.go                # 事件总线：Console 与 Receiver SSE 混合推送 Brokers
+├── utils.go                 # 系统工具：PATH 搜索、硬件/TCXO CLK 检测与 gzip 提取
+├── downloader.go            # 自动化下载器：NOAA CORS 与 BKG 每日多星历拉取
+├── simulation.go            # 信号生成发射：SDR 编译编译脚本与发射子进程驱动
+├── receiver.go              # 信号扫频接收：hackrf_sweep 解析、高频遥测仿真发生器
+├── build_package.sh         # macOS/Linux 跨平台一键编译打包脚本
+├── build_package.ps1        # Windows 11 本地打包脚本
+└── go.mod                   # Go 模块配置文件
+```
+
+### 🎯 后端 Go 多模块划分说明
+*   **`main.go`**：核心系统引导文件。负责解析 CLI 参数，注册路由映射，嵌入静态 `FS` 资源，并启动监听 HTTP 网络端口。
+*   **`state.go`**：状态常量与星座注册。统一声明卫星发射/接收系统的全局同步锁 `stateMutex`、当前的 `SimStatus`、多波段中频对照表 `GNSSRegistry` 以及全局变量定义。
+*   **`auth.go`**：安全校验管理器。内置 Token 提取校验机制与 `withAuth` 中间件，阻拦非授权控制台调用。
+*   **`broker.go`**：高性能发布订阅总线。搭载高并发线程安全读写锁，管理日志流 `LogBroker` 以及频谱扫频/卫星遥测混合流 `SweepBroker`。
+*   **`utils.go`**：系统底座探针。托管系统 PATH 探测、Gzip 提取工具，并实时探查 `hackrf_info` 物理连接与 TCXO 时钟锁定状态。
+*   **`downloader.go`**：星历网络下载调度。提供后台并发例程自动下载解压 NOAA CORS 每日 GPS 星历及 BKG 多星座 Rinex 广播混合星历。
+*   **`simulation.go`**：基带生成发射控制中心。调度 `gps-sdr-sim` 或 `beidou-sdr-sim` 编译编译生成 8bit 基带信号，并拉起 `hackrf_transfer` 守护进程进行信号发射。
+*   **`receiver.go`**：接收扫频与遥测仿真控制器。执行 `hackrf_sweep` 物理高速数据流解析。若未连接真机，自适应切换至高度逼真的 PSD 噪声波形仿真及卫星仰角方位角漂移仿真。
+
+### 🎨 前端 ES6 Module 现代化设计
+本项目在前端弃用了笨重的打包构建工具链，采用浏览器原生的 **ES6 模块导入机制 (`type="module"`)**，实现了逻辑深度解耦，保障单二进制嵌入的零污染特性：
+*   **应用总控 (`app.js`)**：负责绑定主 Tab 发射/接收切换逻辑，统一调度 poll 状态轮询及控制台行级输出。
+*   **数据通信 (`api.js`)**：内置 `authedFetch`，维护高频 EventSource SSE 频谱和遥测卫星数据推送通道。
+*   **安全认证 (`auth.js`)**：处理登录 Modal 控制、凭证持久化及 Token 清除。
+*   **地图定位 (`map.js`)**：包装 Leaflet 图层管理与经纬度选点反馈，并调用 Nominatim API 进行模糊地址解析。
+*   **解算看板 (`telemetry.js`)**：负责 GPSTest 面板数据渲染，动态决定定位 Fix 状态灯状态，并根据载噪比高度同步 SNR 强度条。
+*   **高清重绘渲染 (`canvas.js`)**：基于屏幕 `devicePixelRatio` 智能优化 Canvas 图形缓冲区大小。托管包含虚线频点指示的折线图、基于 HSL 热力学色阶色盘映射的瀑布图，以及通过三角函数圆投影天穹实现的极坐标卫星雷达等核心渲染算法。
+
+---
+
 ## 🤖 GitHub Actions 自动化 CI/CD
 
 本项目已完整配置 **GitHub Actions** 自动化工作流。当您将代码推送至 GitHub 仓库后，系统将自动触发持续集成与构建：

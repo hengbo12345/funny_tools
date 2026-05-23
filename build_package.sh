@@ -29,7 +29,7 @@ build_linux() {
     echo "   [1/3] Compiling Go binary..."
     LINUX_BUILD_PATH="${BUILD_DIR}/linux_pkg"
     mkdir -p "${LINUX_BUILD_PATH}"
-    GOOS=linux GOARCH=amd64 go build -o "${LINUX_BUILD_PATH}/${APP_NAME}" "${WORKSPACE_DIR}/main.go"
+    GOOS=linux GOARCH=amd64 go build -o "${LINUX_BUILD_PATH}/${APP_NAME}" "${WORKSPACE_DIR}"
     
     # 2. Prepare Assets
     echo "   [2/3] Preparing assets..."
@@ -56,7 +56,7 @@ build_windows() {
     echo "   [1/3] Compiling Go binary..."
     WINDOWS_BUILD_PATH="${BUILD_DIR}/windows_pkg"
     mkdir -p "${WINDOWS_BUILD_PATH}"
-    GOOS=windows GOARCH=amd64 go build -o "${WINDOWS_BUILD_PATH}/${APP_NAME}.exe" "${WORKSPACE_DIR}/main.go"
+    GOOS=windows GOARCH=amd64 go build -o "${WINDOWS_BUILD_PATH}/${APP_NAME}.exe" "${WORKSPACE_DIR}"
     
     # 2. Prepare Assets
     echo "   [2/3] Preparing assets..."
