@@ -926,3 +926,26 @@ input:focus, select:focus {
     display: none !important;
 }
 
+/* GNSS Multi-band customization styles */
+.system-band-select-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 14px;
+}
+
+.download-buttons-group {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    width: 100%;
+}
+
+@media (max-width: 600px) {
+    .system-band-select-grid {
+        grid-template-columns: 1fr;
+    }
+    .download-buttons-group {
+        grid-template-columns: 1fr;
+    }
+}
+

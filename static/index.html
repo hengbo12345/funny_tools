@@ -109,11 +109,29 @@
                         </div>
                     </div>
 
+                    <!-- GNSS System & Band Select -->
+                    <div class="settings-grid system-band-select-grid">
+                        <div class="form-group">
+                            <label for="select-system">卫星导航系统 (GNSS System)</label>
+                            <select id="select-system">
+                                <option value="gps" selected>GPS 卫星全球定位系统</option>
+                                <option value="beidou">北斗卫星导航系统 (BDS)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="select-band">民用导航频段 (Band / 频点)</label>
+                            <select id="select-band">
+                                <option value="L1" selected>L1 - 1575.42 MHz</option>
+                                <option value="L5">L5 - 1176.45 MHz (实验性)</option>
+                            </select>
+                        </div>
+                    </div>
+
                     <!-- Setup & Configuration -->
                     <div class="simulation-settings">
                         <!-- Ephemeris -->
                         <div class="form-group">
-                            <label for="select-ephemeris">GPS 星历数据文件 (Daily Ephemeris)</label>
+                            <label for="select-ephemeris">星历数据文件 (RINEX Ephemeris File)</label>
                             <div class="select-button-wrapper">
                                 <select id="select-ephemeris">
                                     <option value="" disabled selected>读取星历列表中...</option>
@@ -129,17 +147,27 @@
                             
                             <!-- Ephemeris Actions -->
                             <div class="ephemeris-actions">
-                                <button id="btn-download-ephemeris" class="btn btn-action btn-sm">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                        <polyline points="7 10 12 15 17 10"></polyline>
-                                        <line x1="12" y1="15" x2="12" y2="3"></line>
-                                    </svg>
-                                    自动拉取今日星历
-                                </button>
+                                <div class="download-buttons-group">
+                                    <button id="btn-download-ephemeris" class="btn btn-action btn-sm" title="从 NOAA 下载 GPS 每日星历">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                            <polyline points="7 10 12 15 17 10"></polyline>
+                                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                                        </svg>
+                                        下载 GPS 星历
+                                    </button>
+                                    <button id="btn-download-ephemeris-bds" class="btn btn-action btn-sm" title="从 BKG 下载北斗多系统混合星历">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                            <polyline points="7 10 12 15 17 10"></polyline>
+                                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                                        </svg>
+                                        下载北斗混合星历
+                                    </button>
+                                </div>
                                 
                                 <div class="upload-wrapper">
-                                    <input type="file" id="ephemeris-upload" class="hidden-upload" accept=".n,.brdc">
+                                    <input type="file" id="ephemeris-upload" class="hidden-upload" accept=".n,.brdc,.nav,.rnx">
                                     <button id="btn-upload-trigger" class="btn btn-action btn-sm">
                                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -178,7 +206,7 @@
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
                             </svg>
-                            启动 GPS 信号模拟
+                            启动卫星信号模拟
                         </button>
                         <button id="btn-stop" class="btn btn-danger btn-large" disabled>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

@@ -27,6 +27,8 @@ document.addEventListener('DOMContentLoaded', () => {
         inputLat: document.getElementById('input-lat'),
         inputLng: document.getElementById('input-lng'),
         inputAlt: document.getElementById('input-alt'),
+        selectSystem: document.getElementById('select-system'),
+        selectBand: document.getElementById('select-band'),
         selectEphemeris: document.getElementById('select-ephemeris'),
         inputDuration: document.getElementById('input-duration'),
         inputGain: document.getElementById('input-gain'),
@@ -38,6 +40,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btnSearch: document.getElementById('btn-search'),
         btnEphemerisRefresh: document.getElementById('btn-ephemeris-refresh'),
         btnDownloadEphemeris: document.getElementById('btn-download-ephemeris'),
+        btnDownloadEphemerisBds: document.getElementById('btn-download-ephemeris-bds'),
         btnUploadTrigger: document.getElementById('btn-upload-trigger'),
         ephemerisUpload: document.getElementById('ephemeris-upload'),
         btnSystemSetup: document.getElementById('btn-system-setup'),
@@ -146,10 +149,38 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // -------------------------------------------------------------
+    // GNSS BANDS DICTIONARY & SELECT MANAGEMENT
+    // -------------------------------------------------------------
+    const GNSS_BANDS = {
+        gps: [
+            { value: 'L1', text: 'L1 - 1575.42 MHz' },
+            { value: 'L5', text: 'L5 - 1176.45 MHz (实验性)' }
+        ],
+        beidou: [
+            { value: 'B1I', text: 'B1I - 1561.098 MHz' },
+            { value: 'B1C', text: 'B1C - 1575.42 MHz (实验性)' },
+            { value: 'B2a', text: 'B2a - 1176.45 MHz (实验性)' }
+        ]
+    };
+
+    function updateBandOptions() {
+        const system = elements.selectSystem.value;
+        const bands = GNSS_BANDS[system] || [];
+        elements.selectBand.innerHTML = '';
+        bands.forEach(b => {
+            const opt = document.createElement('option');
+            opt.value = b.value;
+            opt.textContent = b.text;
+            elements.selectBand.appendChild(opt);
+        });
+    }
+
+    // -------------------------------------------------------------
     // INITIALIZATION
     // -------------------------------------------------------------
 
     initMap();
+    updateBandOptions();
     setupEventListeners();
     connectSSE();
     pollStatus();
@@ -311,36 +342,59 @@ document.addEventListener('DOMContentLoaded', () => {
         // 3. Overall Simulation status
         isSimulationRunning = data.status === 'generating' || data.status === 'transmitting';
         
+        // Keep selects in sync if simulation is running
+        if (data.active_sim) {
+            if (elements.selectSystem.value !== data.active_sim.system) {
+                elements.selectSystem.value = data.active_sim.system;
+                updateBandOptions();
+            }
+            elements.selectBand.value = data.active_sim.band;
+        }
+
         switch (data.status) {
             case 'idle':
                 elements.simVal.textContent = "空闲 (IDLE)";
                 elements.simIndicator.className = "indicator gray";
                 elements.btnStart.disabled = false;
                 elements.btnStop.disabled = true;
+                elements.selectSystem.disabled = false;
+                elements.selectBand.disabled = false;
                 break;
             case 'generating':
-                elements.simVal.textContent = "正在生成基带... (GENERATING)";
+                elements.simVal.textContent = "正在生成信号基带... (GENERATING)";
                 elements.simIndicator.className = "indicator amber pulse";
                 elements.btnStart.disabled = true;
                 elements.btnStop.disabled = false;
+                elements.selectSystem.disabled = true;
+                elements.selectBand.disabled = true;
                 break;
             case 'transmitting':
-                elements.simVal.textContent = "正在发射GPS模拟信号... (TRANSMITTING)";
+                const sysName = data.active_sim && data.active_sim.system === 'beidou' ? '北斗' : 'GPS';
+                const bandName = data.active_sim ? data.active_sim.band : 'L1';
+                elements.simVal.textContent = `正在发射 ${sysName} ${bandName} 模拟信号... (TRANSMITTING)`;
                 elements.simIndicator.className = "indicator green pulse";
                 elements.btnStart.disabled = true;
                 elements.btnStop.disabled = false;
+                elements.selectSystem.disabled = true;
+                elements.selectBand.disabled = true;
                 break;
             case 'error':
                 elements.simVal.textContent = "发生错误 (ERROR)";
                 elements.simIndicator.className = "indicator red pulse";
                 elements.btnStart.disabled = false;
                 elements.btnStop.disabled = true;
+                elements.selectSystem.disabled = false;
+                elements.selectBand.disabled = false;
                 break;
         }
 
-        // 4. Missing gps-sdr-sim binary warning
-        if (!data.gps_sim_exists) {
+        // 4. Missing signal generator warning
+        if (!data.gps_sim_exists || !data.beidou_sim_exists) {
             elements.gpsSimMissingAlert.classList.remove('hidden');
+            let missing = [];
+            if (!data.gps_sim_exists) missing.push('gps-sdr-sim');
+            if (!data.beidou_sim_exists) missing.push('beidou-sdr-sim');
+            elements.gpsSimMissingAlert.querySelector('h3').innerHTML = `系统缺少 <code>${missing.join(' / ')}</code> 信号生成组件`;
         } else {
             elements.gpsSimMissingAlert.classList.add('hidden');
         }
@@ -457,7 +511,9 @@ document.addEventListener('DOMContentLoaded', () => {
             alt: parseFloat(elements.inputAlt.value),
             duration: parseInt(elements.inputDuration.value),
             gain: parseInt(elements.inputGain.value),
-            ephemeris: elements.selectEphemeris.value
+            ephemeris: elements.selectEphemeris.value,
+            system: elements.selectSystem.value,
+            band: elements.selectBand.value
         };
 
         if (isNaN(params.lat) || isNaN(params.lng)) {
@@ -497,17 +553,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function autoDownloadEphemeris() {
-        elements.btnDownloadEphemeris.disabled = true;
-        addConsoleLine("[SYSTEM] 星历后台自动下载任务已触发，请查看控制台实时输出...", "system");
+    async function autoDownloadEphemeris(type = 'gps') {
+        const btn = type === 'multi' ? elements.btnDownloadEphemerisBds : elements.btnDownloadEphemeris;
+        btn.disabled = true;
+        const label = type === 'multi' ? '北斗多系统混合' : 'GPS';
+        addConsoleLine(`[SYSTEM] ${label}星历后台自动下载任务已触发，请查看控制台实时输出...`, "system");
         
         try {
-            const response = await authedFetch('/api/ephemeris/download', { method: 'POST' });
+            const response = await authedFetch('/api/ephemeris/download', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type: type })
+            });
             if (!response.ok) throw new Error("下载请求提交失败");
         } catch (error) {
             addConsoleLine(`[SYSTEM] 触发星历下载失败: ${error.message}`, "error");
         } finally {
-            setTimeout(() => { elements.btnDownloadEphemeris.disabled = false; }, 3000);
+            setTimeout(() => { btn.disabled = false; }, 3000);
         }
     }
 
@@ -583,7 +645,9 @@ document.addEventListener('DOMContentLoaded', () => {
             pollStatus();
         });
 
-        elements.btnDownloadEphemeris.addEventListener('click', autoDownloadEphemeris);
+        elements.selectSystem.addEventListener('change', updateBandOptions);
+        elements.btnDownloadEphemeris.addEventListener('click', () => autoDownloadEphemeris('gps'));
+        elements.btnDownloadEphemerisBds.addEventListener('click', () => autoDownloadEphemeris('multi'));
 
         elements.btnUploadTrigger.addEventListener('click', () => {
             elements.ephemerisUpload.click();

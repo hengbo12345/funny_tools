@@ -34,6 +34,43 @@ const (
 	StatusError        SimStatus = "error"
 )
 
+// GNSSBand represents a civilian frequency band
+type GNSSBand struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Frequency float64 `json:"frequency"` // in Hz
+	ToolName  string  `json:"tool_name"`
+}
+
+// GNSSSystem represents a satellite constellation
+type GNSSSystem struct {
+	ID    string     `json:"id"`
+	Name  string     `json:"name"`
+	Bands []GNSSBand `json:"bands"`
+}
+
+var (
+	GNSSRegistry = []GNSSSystem{
+		{
+			ID:   "gps",
+			Name: "GPS 卫星定位系统",
+			Bands: []GNSSBand{
+				{ID: "L1", Name: "L1 - 1575.42 MHz", Frequency: 1575420000, ToolName: "gps-sdr-sim"},
+				{ID: "L5", Name: "L5 - 1176.45 MHz (实验性)", Frequency: 1176450000, ToolName: "gps-sdr-sim-l5"},
+			},
+		},
+		{
+			ID:   "beidou",
+			Name: "北斗卫星导航系统 (BDS)",
+			Bands: []GNSSBand{
+				{ID: "B1I", Name: "B1I - 1561.098 MHz", Frequency: 1561098000, ToolName: "beidou-sdr-sim"},
+				{ID: "B1C", Name: "B1C - 1575.42 MHz (实验性)", Frequency: 1575420000, ToolName: "beidou-sdr-sim-b1c"},
+				{ID: "B2a", Name: "B2a - 1176.45 MHz (实验性)", Frequency: 1176450000, ToolName: "beidou-sdr-sim-b2a"},
+			},
+		},
+	}
+)
+
 // ActiveSim holds information about the currently running simulation
 type ActiveSim struct {
 	Lat       float64   `json:"lat"`
@@ -43,6 +80,8 @@ type ActiveSim struct {
 	Gain      int       `json:"gain"`
 	Ephemeris string    `json:"ephemeris"`
 	StartTime time.Time `json:"start_time"`
+	System    string    `json:"system"`
+	Band      string    `json:"band"`
 }
 
 // SystemStatus holds overall backend system and hardware status
@@ -54,6 +93,7 @@ type SystemStatus struct {
 	ActiveSim       *ActiveSim `json:"active_sim"`
 	EphemerisFiles  []string   `json:"ephemeris_files"`
 	GpsSimExists    bool       `json:"gps_sim_exists"`
+	BeidouSimExists bool       `json:"beidou_sim_exists"`
 }
 
 // Global variables for CLI flags and state
@@ -233,17 +273,17 @@ func main() {
 // HELPER FUNCTIONS FOR HARDWARE & BINARY CHECKS
 // -------------------------------------------------------------
 
-// findGpsSdrSim searches for gps-sdr-sim executable
-func findGpsSdrSim() string {
+// findSimTool searches for a given simulator tool executable
+func findSimTool(toolName string) string {
 	ext := ""
 	if runtime.GOOS == "windows" {
 		ext = ".exe"
 	}
 	paths := []string{
-		"./gps-sdr-sim" + ext,
-		"./bin/gps-sdr-sim" + ext,
-		"/usr/local/bin/gps-sdr-sim" + ext,
-		"/usr/bin/gps-sdr-sim" + ext,
+		"./" + toolName + ext,
+		"./bin/" + toolName + ext,
+		"/usr/local/bin/" + toolName + ext,
+		"/usr/bin/" + toolName + ext,
 	}
 	for _, p := range paths {
 		if info, err := os.Stat(p); err == nil && !info.IsDir() {
@@ -251,15 +291,23 @@ func findGpsSdrSim() string {
 		}
 	}
 	// Check standard PATH
-	if p, err := exec.LookPath("gps-sdr-sim" + ext); err == nil {
+	if p, err := exec.LookPath(toolName + ext); err == nil {
 		return p
 	}
 	if runtime.GOOS == "windows" {
-		if p, err := exec.LookPath("gps-sdr-sim"); err == nil {
+		if p, err := exec.LookPath(toolName); err == nil {
 			return p
 		}
 	}
 	return ""
+}
+
+func findGpsSdrSim() string {
+	return findSimTool("gps-sdr-sim")
+}
+
+func findBeidouSdrSim() string {
+	return findSimTool("beidou-sdr-sim")
 }
 
 // checkHackRFConnected runs hackrf_info to detect device
@@ -317,7 +365,12 @@ func listEphemerisFiles() []string {
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() {
-			files = append(files, entry.Name())
+			name := strings.ToLower(entry.Name())
+			if strings.HasSuffix(name, ".n") || strings.HasSuffix(name, ".brdc") || 
+				strings.HasSuffix(name, ".nav") || strings.HasSuffix(name, ".rnx") || 
+				strings.Contains(name, "brdc") {
+				files = append(files, entry.Name())
+			}
 		}
 	}
 	return files
@@ -350,7 +403,6 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	isTx := status == StatusTransmitting
 	tcxo := checkTcxoStatus(isTx)
 	ephemerisList := listEphemerisFiles()
-	gpsSimPath := findGpsSdrSim()
 
 	sysStatus := SystemStatus{
 		TokenRequired:   tokenRequired,
@@ -359,7 +411,8 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 		TcxoStatus:      tcxo,
 		ActiveSim:       active,
 		EphemerisFiles:  ephemerisList,
-		GpsSimExists:    gpsSimPath != "",
+		GpsSimExists:    findGpsSdrSim() != "",
+		BeidouSimExists: findBeidouSdrSim() != "",
 	}
 
 	json.NewEncoder(w).Encode(sysStatus)
@@ -387,6 +440,8 @@ func handleStart(w http.ResponseWriter, r *http.Request) {
 		Duration  int     `json:"duration"`
 		Gain      int     `json:"gain"`
 		Ephemeris string  `json:"ephemeris"`
+		System    string  `json:"system"`
+		Band      string  `json:"band"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -405,19 +460,47 @@ func handleStart(w http.ResponseWriter, r *http.Request) {
 	if req.Gain < 0 || req.Gain > 47 {
 		req.Gain = 0 // default minimum gain
 	}
+	if req.System == "" {
+		req.System = "gps"
+	}
+	if req.Band == "" {
+		if req.System == "beidou" {
+			req.Band = "B1I"
+		} else {
+			req.Band = "L1"
+		}
+	}
 	if req.Ephemeris == "" {
 		// Use first available ephemeris
 		files := listEphemerisFiles()
 		if len(files) == 0 {
-			http.Error(w, "No GPS ephemeris file available. Please download or upload one first.", http.StatusBadRequest)
+			http.Error(w, "No ephemeris file available. Please download or upload one first.", http.StatusBadRequest)
 			return
 		}
 		req.Ephemeris = files[0]
 	}
 
-	gpsSimPath := findGpsSdrSim()
-	if gpsSimPath == "" {
-		http.Error(w, "gps-sdr-sim executable not found. Please click 'Install Dependencies' or compile it.", http.StatusInternalServerError)
+	// Find the matching GNSS band
+	var targetBand *GNSSBand
+	for _, s := range GNSSRegistry {
+		if s.ID == req.System {
+			for _, b := range s.Bands {
+				if b.ID == req.Band {
+					targetBand = &b
+					break
+				}
+			}
+		}
+	}
+
+	if targetBand == nil {
+		http.Error(w, fmt.Sprintf("Unsupported system/band combination: %s/%s", req.System, req.Band), http.StatusBadRequest)
+		return
+	}
+
+	simPath := findSimTool(targetBand.ToolName)
+	if simPath == "" {
+		http.Error(w, fmt.Sprintf("基带信号生成器可执行程序 %s 未找到。请点击下方“一键编译环境”或手动下载部署该二进制文件。", targetBand.ToolName), http.StatusInternalServerError)
 		return
 	}
 
@@ -432,17 +515,14 @@ func handleStart(w http.ResponseWriter, r *http.Request) {
 		Gain:      req.Gain,
 		Ephemeris: req.Ephemeris,
 		StartTime: time.Now(),
+		System:    req.System,
+		Band:      req.Band,
 	}
 	recentErrorMsg = ""
 	stateMutex.Unlock()
 
-	logBroker.Broadcast("=================== 启动 GPS 模拟任务 ===================")
-	logBroker.Broadcast(fmt.Sprintf("位置: 纬度=%f, 经度=%f, 海拔=%f米", req.Lat, req.Lng, req.Alt))
-	logBroker.Broadcast(fmt.Sprintf("时长: %d 秒 | 发射增益: %d dB", req.Duration, req.Gain))
-	logBroker.Broadcast(fmt.Sprintf("所用星历: %s", req.Ephemeris))
-
 	// Run simulation in background goroutine
-	go runSimulationFlow(gpsSimPath, req.Lat, req.Lng, req.Alt, req.Duration, req.Gain, req.Ephemeris)
+	go runSimulationFlow(simPath, req.Lat, req.Lng, req.Alt, req.Duration, req.Gain, req.Ephemeris, req.System, req.Band)
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"message": "Simulation started successfully"}`))
@@ -515,10 +595,66 @@ func handleDownloadEphemeris(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go triggerEphemerisDownload()
+	var req struct {
+		Type string `json:"type"` // "gps" or "multi"
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Type == "" {
+		req.Type = "gps"
+	}
+
+	if req.Type == "multi" {
+		go triggerMultiEphemerisDownload()
+	} else {
+		go triggerEphemerisDownload()
+	}
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"message": "Ephemeris download triggered in background"}`))
+}
+
+func triggerMultiEphemerisDownload() {
+	logBroker.Broadcast("正在尝试自动下载最新北斗多系统混合广播星历 (BRDC)...")
+	
+	// BKG mirror URL: https://igs.bkg.bund.de/root_ftp/IGS/BRDC/{YYYY}/{DDD}/BRDC00IGS_R_{YYYY}{DDD}0000_01D_MN.rnx.gz
+	now := time.Now().UTC()
+	success := false
+	var err error
+
+	for offset := 0; offset <= 2; offset++ {
+		targetTime := now.AddDate(0, 0, -offset)
+		year := targetTime.Year()
+		doy := targetTime.YearDay()
+		doyStr := fmt.Sprintf("%03d", doy)
+
+		// RINEX 3 Mixed Navigation long name format
+		url := fmt.Sprintf("https://igs.bkg.bund.de/root_ftp/IGS/BRDC/%d/%s/BRDC00IGS_R_%d%s0000_01D_MN.rnx.gz", year, doyStr, year, doyStr)
+		filename := fmt.Sprintf("BRDC00IGS_R_%d%s0000_01D_MN.rnx.gz", year, doyStr)
+		destFileName := fmt.Sprintf("BRDC00IGS_R_%d%s0000_01D_MN.rnx", year, doyStr)
+		destPath := filepath.Join("data/ephemeris", destFileName)
+
+		// If decompressed file already exists, don't download
+		if _, statErr := os.Stat(destPath); statErr == nil {
+			logBroker.Broadcast(fmt.Sprintf("混合星历文件 %s 已存在，无需重复下载。", destFileName))
+			success = true
+			break
+		}
+
+		logBroker.Broadcast(fmt.Sprintf("正在尝试从 BKG 镜像下载 (%d天前混合星历): %s ...", offset, url))
+		
+		err = downloadAndExtractGz(url, filename, destPath)
+		if err == nil {
+			logBroker.Broadcast(fmt.Sprintf("✅ 混合星历文件下载并解压成功: %s", destFileName))
+			success = true
+			break
+		} else {
+			logBroker.Broadcast(fmt.Sprintf("该日混合星历获取失败: %v", err))
+		}
+	}
+
+	if !success {
+		logBroker.Broadcast("❌ 自动下载混合星历失败！请确保您的服务器能够正常连接互联网，或使用手动上传。")
+	}
 }
 
 func handleUploadEphemeris(w http.ResponseWriter, r *http.Request) {
@@ -582,22 +718,21 @@ func handleSystemSetup(w http.ResponseWriter, r *http.Request) {
 // CORE BUSINESS LOGIC (BACKGROUND WORKERS)
 // -------------------------------------------------------------
 
-func runSimulationFlow(gpsSimPath string, lat, lng, alt float64, duration, gain int, ephemeris string) {
+func runSimulationFlow(simPath string, lat, lng, alt float64, duration, gain int, ephemeris string, system string, band string) {
 	ephemerisPath := filepath.Join("data/ephemeris", ephemeris)
 	binPath := filepath.Clean("data/gps.bin")
 
 	// Delete old file if exists
 	os.Remove(binPath)
 
-	// Step 1: Execute gps-sdr-sim to generate binary
-	logBroker.Broadcast("---------------- [1/2] 正在生成 GPS 基带信号 ----------------")
+	// Step 1: Execute simulation tool to generate binary
+	logBroker.Broadcast("---------------- [1/2] 正在生成基带仿真信号 ----------------")
 	
 	latStr := fmt.Sprintf("%f", lat)
 	lngStr := fmt.Sprintf("%f", lng)
 	altStr := fmt.Sprintf("%f", alt)
 	durStr := fmt.Sprintf("%d", duration)
 
-	// Command: gps-sdr-sim -b 8 -e <ephemeris> -l <lat,lng,alt> -d <dur> -o <output>
 	cmdArgs := []string{
 		"-b", "8",
 		"-e", ephemerisPath,
@@ -606,9 +741,9 @@ func runSimulationFlow(gpsSimPath string, lat, lng, alt float64, duration, gain 
 		"-o", binPath,
 	}
 
-	logBroker.Broadcast(fmt.Sprintf("执行命令: %s %s", gpsSimPath, strings.Join(cmdArgs, " ")))
+	logBroker.Broadcast(fmt.Sprintf("执行命令: %s %s", simPath, strings.Join(cmdArgs, " ")))
 	
-	cmd := exec.Command(gpsSimPath, cmdArgs...)
+	cmd := exec.Command(simPath, cmdArgs...)
 	
 	stateMutex.Lock()
 	activeCmd = cmd
@@ -630,14 +765,12 @@ func runSimulationFlow(gpsSimPath string, lat, lng, alt float64, duration, gain 
 	scanner := bufio.NewScanner(stdoutPipe)
 	for scanner.Scan() {
 		text := scanner.Text()
-		// Filter progress or important logs to avoid overwhelming the log
 		if strings.Contains(text, "Time index") || strings.Contains(text, "Processed") || strings.Contains(text, "%") || len(text) > 0 {
 			logBroker.Broadcast(text)
 		}
 	}
 
 	if err := cmd.Wait(); err != nil {
-		// If killed intentionally, don't set error
 		stateMutex.RLock()
 		isIdle := currentStatus == StatusIdle
 		stateMutex.RUnlock()
@@ -652,7 +785,7 @@ func runSimulationFlow(gpsSimPath string, lat, lng, alt float64, duration, gain 
 	// Check if output file exists and is not empty
 	stat, err := os.Stat(binPath)
 	if err != nil || stat.Size() == 0 {
-		handleFlowError("生成的 gps.bin 信号文件不存在或为空！基带生成阶段失败。")
+		handleFlowError("生成的信号基带文件不存在或为空！基带生成阶段失败。")
 		return
 	}
 
@@ -671,10 +804,25 @@ func runSimulationFlow(gpsSimPath string, lat, lng, alt float64, duration, gain 
 	currentStatus = StatusTransmitting
 	stateMutex.Unlock()
 
-	// Command: hackrf_transfer -t data/gps.bin -f 1575420000 -s 2600000 -a 1 -x <gain>
+	// Dynamic frequency lookup based on band
+	var freqHz float64 = 1575420000 // default L1
+	for _, s := range GNSSRegistry {
+		if s.ID == system {
+			for _, b := range s.Bands {
+				if b.ID == band {
+					freqHz = b.Frequency
+					break
+				}
+			}
+		}
+	}
+
+	logBroker.Broadcast(fmt.Sprintf("发射系统: %s | 频段: %s | 发射频点: %.3f MHz", strings.ToUpper(system), band, freqHz/1000000.0))
+
+	// Command: hackrf_transfer -t data/gps.bin -f <freq> -s 2600000 -a 1 -x <gain>
 	txArgs := []string{
 		"-t", binPath,
-		"-f", "1575420000", // GPS L1 frequency
+		"-f", fmt.Sprintf("%.0f", freqHz),
 		"-s", "2600000",    // 2.6 MHz sample rate
 		"-a", "1",          // Enable amplifier
 		"-x", strconv.Itoa(gain),
@@ -704,7 +852,6 @@ func runSimulationFlow(gpsSimPath string, lat, lng, alt float64, duration, gain 
 	scannerTx := bufio.NewScanner(stdoutTx)
 	for scannerTx.Scan() {
 		text := scannerTx.Text()
-		// Only broadcast periodic status updates
 		if strings.Contains(text, "MiB/s") || strings.Contains(text, "Sound") || strings.Contains(text, "Error") || strings.Contains(text, "detect") {
 			logBroker.Broadcast(text)
 		}
@@ -723,8 +870,8 @@ func runSimulationFlow(gpsSimPath string, lat, lng, alt float64, duration, gain 
 	}
 
 	// Completion
-	logBroker.Broadcast("=================== 模拟发射正常结束 ===================")
-	logBroker.Broadcast("已成功传输完毕所有 GPS 模拟基带数据。")
+	logBroker.Broadcast("=================== 卫星信号模拟发射正常结束 ===================")
+	logBroker.Broadcast(fmt.Sprintf("已成功传输完毕所有 %s %s 模拟信号基带数据。", strings.ToUpper(system), band))
 
 	stateMutex.Lock()
 	currentStatus = StatusIdle
@@ -841,21 +988,13 @@ func triggerSystemSetup() {
 	logBroker.Broadcast("=================== 开始配置系统环境依赖 ===================")
 	
 	if runtime.GOOS == "windows" {
-		logBroker.Broadcast("检测到当前操作系统为 Windows 11。")
-		logBroker.Broadcast("Windows 环境下的 HackRF 工具链与编译依赖无法通过此程序自动一键安装。")
+		logBroker.Broadcast("检测到当前操作系统为 Windows。")
 		logBroker.Broadcast("请按照以下步骤手动进行配置：")
 		logBroker.Broadcast("----------------------------------------------------------")
-		logBroker.Broadcast("1. 安装 HackRF 硬件驱动：")
-		logBroker.Broadcast("   - 下载 Zadig 驱动工具 (https://zadig.akeo.ie/)。")
-		logBroker.Broadcast("   - 连接 HackRF One，将驱动成功替换/安装为 WinUSB。")
-		logBroker.Broadcast("2. 安装 Windows SDR 工具链 (包含 hackrf_transfer)：")
-		logBroker.Broadcast("   - 使用 Chocolatey 运行: choco install pothossdr")
-		logBroker.Broadcast("   - 或手动从 PothosSDR GitHub Releases 下载安装，并确保已将其 bin/ 目录加入系统环境变量 PATH。")
-		logBroker.Broadcast("3. 部署基带信号生成器 (gps-sdr-sim.exe)：")
-		logBroker.Broadcast("   - 从 https://github.com/osqzss/gps-sdr-sim/releases 下载编译好的 Windows 二进制文件。")
-		logBroker.Broadcast("   - 将解压出的 gps-sdr-sim.exe 复制到本软件所在的根目录下。")
+		logBroker.Broadcast("1. 安装 HackRF 驱动：通过 Zadig 将 HackRF 替换为 WinUSB 驱动。")
+		logBroker.Broadcast("2. 安装 SDR 工具链：使用 'choco install pothossdr' 或从 GitHub 下载 PothosSDR 并配置 PATH。")
+		logBroker.Broadcast("3. 放置可执行文件：下载并放置 gps-sdr-sim.exe 和 beidou-sdr-sim.exe 到根目录。")
 		logBroker.Broadcast("----------------------------------------------------------")
-		logBroker.Broadcast("配置详情可参阅项目自带 of README_Windows.md 手册。")
 		logBroker.Broadcast("=================== 依赖配置环境指南结束 ===================")
 		return
 	}
@@ -865,27 +1004,22 @@ func triggerSystemSetup() {
 	aptCmd := exec.Command("sudo", "apt-get", "update")
 	aptCmd.Stdout = os.Stdout
 	aptCmd.Stderr = os.Stderr
-	logBroker.Broadcast("执行: sudo apt-get update (如果需要，请在后台终端输入密码)")
-	
-	// Note: We won't block completely or fail if sudo fails, we'll try our best.
 	_ = aptCmd.Run()
 
 	installCmd := exec.Command("sudo", "apt-get", "install", "-y", "git", "build-essential", "libfftw3-dev", "hackrf")
-	logBroker.Broadcast("执行: sudo apt-get install -y git build-essential libfftw3-dev hackrf")
 	var installErr bytes.Buffer
 	installCmd.Stderr = &installErr
 	if err := installCmd.Run(); err != nil {
-		logBroker.Broadcast(fmt.Sprintf("安装包可能需要交互或权限不足: %s. 请手动运行安装命令。", installErr.String()))
+		logBroker.Broadcast(fmt.Sprintf("安装包可能需要手动运行: %s", installErr.String()))
 	} else {
-		logBroker.Broadcast("✅ 系统包依赖已全部安装完毕。")
+		logBroker.Broadcast("✅ 系统包依赖已安装。")
 	}
 
-	// Clone and compile gps-sdr-sim locally if it does not exist
+	// 1. Clone and compile gps-sdr-sim locally if it does not exist
 	gpsSimPath := findGpsSdrSim()
 	if gpsSimPath == "" {
 		logBroker.Broadcast("检测到系统中未找到 gps-sdr-sim 可执行程序，正在进行本地自动下载与编译...")
 		
-		// Clean compile directory
 		buildDir := "data/gps-sdr-sim-build"
 		_ = os.RemoveAll(buildDir)
 
@@ -893,49 +1027,74 @@ func triggerSystemSetup() {
 		cloneCmd := exec.Command("git", "clone", "--depth", "1", "https://github.com/osqzss/gps-sdr-sim.git", buildDir)
 		if err := cloneCmd.Run(); err != nil {
 			logBroker.Broadcast(fmt.Sprintf("❌ 克隆 gps-sdr-sim 失败: %v", err))
-			return
+		} else {
+			logBroker.Broadcast("正在编译 gps-sdr-sim ...")
+			makeCmd := exec.Command("make")
+			makeCmd.Dir = buildDir
+			var makeErr bytes.Buffer
+			makeCmd.Stderr = &makeErr
+			if err := makeCmd.Run(); err != nil {
+				logBroker.Broadcast(fmt.Sprintf("❌ 编译失败: %s. 请检查您的 GCC 和 Make 环境。", makeErr.String()))
+			} else {
+				srcBin := filepath.Join(buildDir, "gps-sdr-sim")
+				destBin := "./gps-sdr-sim"
+				
+				input, err := os.Open(srcBin)
+				if err == nil {
+					output, err := os.OpenFile(destBin, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+					if err == nil {
+						_, _ = io.Copy(output, input)
+						output.Close()
+						logBroker.Broadcast("✅ gps-sdr-sim 编译并部署成功！")
+					}
+					input.Close()
+				}
+			}
 		}
-
-		logBroker.Broadcast("正在编译 gps-sdr-sim ...")
-		makeCmd := exec.Command("make")
-		makeCmd.Dir = buildDir
-		var makeErr bytes.Buffer
-		makeCmd.Stderr = &makeErr
-		if err := makeCmd.Run(); err != nil {
-			logBroker.Broadcast(fmt.Sprintf("❌ 编译失败: %s. 请检查您的 GCC 和 Make 环境。", makeErr.String()))
-			return
-		}
-
-		// Copy compiled binary to current path
-		srcBin := filepath.Join(buildDir, "gps-sdr-sim")
-		destBin := "./gps-sdr-sim"
-		
-		input, err := os.Open(srcBin)
-		if err != nil {
-			logBroker.Broadcast(fmt.Sprintf("❌ 无法打开编译后的二进制文件: %v", err))
-			return
-		}
-		defer input.Close()
-
-		output, err := os.OpenFile(destBin, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
-		if err != nil {
-			logBroker.Broadcast(fmt.Sprintf("❌ 无法复制二进制文件: %v", err))
-			return
-		}
-		defer output.Close()
-
-		_, err = io.Copy(output, input)
-		if err != nil {
-			logBroker.Broadcast(fmt.Sprintf("❌ 复制失败: %v", err))
-			return
-		}
-
-		// Clean up build directory
 		_ = os.RemoveAll(buildDir)
-		
-		logBroker.Broadcast("✅ gps-sdr-sim 编译并部署成功！现在位于项目根目录下，您可以开始模拟了！")
 	} else {
 		logBroker.Broadcast(fmt.Sprintf("✅ 检测到系统中已有可用的 gps-sdr-sim (%s)，无需重新编译。", gpsSimPath))
+	}
+
+	// 2. Clone and compile beidou-sdr-sim locally if it does not exist
+	beidouSimPath := findBeidouSdrSim()
+	if beidouSimPath == "" {
+		logBroker.Broadcast("检测到系统中未找到 beidou-sdr-sim 北斗信号生成程序，正在进行本地自动下载与编译...")
+		
+		buildDir := "data/beidou-sdr-sim-build"
+		_ = os.RemoveAll(buildDir)
+
+		logBroker.Broadcast("正在克隆北斗仿真项目: https://github.com/yangfan852219770/beidou-sdr-sim.git ...")
+		cloneCmd := exec.Command("git", "clone", "--depth", "1", "https://github.com/yangfan852219770/beidou-sdr-sim.git", buildDir)
+		if err := cloneCmd.Run(); err != nil {
+			logBroker.Broadcast(fmt.Sprintf("❌ 克隆 beidou-sdr-sim 失败: %v", err))
+		} else {
+			logBroker.Broadcast("正在编译 beidou-sdr-sim ...")
+			makeCmd := exec.Command("gcc", "beidou-sdr-sim.c", "-O3", "-lm", "-o", "beidou-sdr-sim")
+			makeCmd.Dir = buildDir
+			var makeErr bytes.Buffer
+			makeCmd.Stderr = &makeErr
+			if err := makeCmd.Run(); err != nil {
+				logBroker.Broadcast(fmt.Sprintf("❌ 编译北斗生成器失败: %s. 请检查您的 GCC 环境。", makeErr.String()))
+			} else {
+				srcBin := filepath.Join(buildDir, "beidou-sdr-sim")
+				destBin := "./beidou-sdr-sim"
+				
+				input, err := os.Open(srcBin)
+				if err == nil {
+					output, err := os.OpenFile(destBin, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+					if err == nil {
+						_, _ = io.Copy(output, input)
+						output.Close()
+						logBroker.Broadcast("✅ beidou-sdr-sim 北斗信号生成器编译并部署成功！")
+					}
+					input.Close()
+				}
+			}
+		}
+		_ = os.RemoveAll(buildDir)
+	} else {
+		logBroker.Broadcast(fmt.Sprintf("✅ 检测到系统中已有可用的 beidou-sdr-sim (%s)，无需重新编译。", beidouSimPath))
 	}
 	
 	logBroker.Broadcast("=================== 依赖配置环境完成 ===================")
