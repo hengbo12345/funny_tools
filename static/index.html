@@ -57,8 +57,20 @@
             </div>
         </header>
 
-        <!-- MAIN LAYOUT -->
-        <main class="app-grid">
+        <!-- NAVIGATION TABS -->
+        <nav class="app-tabs glass-card">
+            <button class="tab-btn active" id="tab-btn-tx" data-tab="tx">
+                <span class="tab-icon">📡</span> 射频信号发射器
+            </button>
+            <button class="tab-btn" id="tab-btn-rx" data-tab="rx">
+                <span class="tab-icon">🔍</span> 定位系统接收仪
+            </button>
+        </nav>
+
+        <!-- TAB CONTENT: TRANSMITTER -->
+        <div id="tab-content-tx" class="tab-content">
+            <!-- MAIN LAYOUT -->
+            <main class="app-grid">
             
             <!-- LEFT COLUMN: CONTROLS -->
             <section class="panel panel-left glass-card">
@@ -267,6 +279,98 @@
             </section>
 
         </main>
+    </div> <!-- Close #tab-content-tx -->
+
+    <!-- TAB CONTENT: RECEIVER -->
+    <div id="tab-content-rx" class="tab-content hidden">
+        <!-- TOP CARD: GPSTest TELEMETRY BOARD -->
+        <section class="receiver-telemetry-board glass-card">
+            <div class="telemetry-col" id="col-fix">
+                <div class="telemetry-label">定位状态 / FIX TYPE</div>
+                <div class="telemetry-value text-searching" id="rx-fix-type">SEARCHING...</div>
+                <div class="telemetry-sub" id="rx-accuracy">精度: --</div>
+            </div>
+            <div class="telemetry-col" id="col-coords">
+                <div class="telemetry-label">当前位置坐标 / COORDINATES</div>
+                <div class="telemetry-value" id="rx-coords">-- , --</div>
+                <div class="telemetry-sub" id="rx-altitude">海拔: -- m</div>
+            </div>
+            <div class="telemetry-col" id="col-time">
+                <div class="telemetry-label">卫星精确授时 (UTC) / TIME</div>
+                <div class="telemetry-value" id="rx-time">--:--:--.--</div>
+                <div class="telemetry-sub" id="rx-ttff">TTFF (冷启动): -- s</div>
+            </div>
+            <div class="telemetry-col" id="col-satellites">
+                <div class="telemetry-label">解算卫星数 / SATELLITES</div>
+                <div class="telemetry-value">
+                    <span id="rx-sats-used">0</span> <span class="slash">/</span> <span id="rx-sats-inview">0</span>
+                </div>
+                <div class="telemetry-sub sats-badges">
+                    <span class="sat-badge gps-badge inactive" id="badge-gps">GPS (G)</span>
+                    <span class="sat-badge bds-badge inactive" id="badge-bds">BDS (C)</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- MIDDLE & BOTTOM GRID -->
+        <div class="receiver-grid">
+            <!-- LEFT SECTION: SPECTROMETER -->
+            <section class="panel panel-spectrometer glass-card">
+                <div class="panel-header">
+                    <h2>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                        </svg>
+                        实时射频频谱分析仪 (1550 - 1590 MHz)
+                    </h2>
+                    <div class="spectrometer-controls">
+                        <button id="btn-rx-start" class="btn btn-primary btn-xs">
+                            <span class="btn-glow"></span>
+                            启动接收扫频
+                        </button>
+                        <button id="btn-rx-stop" class="btn btn-danger btn-xs" disabled>
+                            停止扫频
+                        </button>
+                    </div>
+                </div>
+                <div class="panel-body canvas-container">
+                    <div class="canvas-wrapper">
+                        <div class="canvas-title">实时功率谱密度 (Power Spectral Density - dB)</div>
+                        <canvas id="canvas-spectrum"></canvas>
+                    </div>
+                    <div class="canvas-wrapper">
+                        <div class="canvas-title">时变瀑布图 (RF Waterfall Heatmap)</div>
+                        <canvas id="canvas-waterfall"></canvas>
+                    </div>
+                </div>
+            </section>
+
+            <!-- RIGHT SECTION: RADAR SKYPLOT & SNR -->
+            <section class="panel panel-radar glass-card">
+                <div class="panel-header">
+                    <h2>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                            <path d="M2 12h20"></path>
+                        </svg>
+                        GNSS 卫星极坐标雷达天顶图 (Skyplot)
+                    </h2>
+                </div>
+                <div class="panel-body skyplot-layout">
+                    <div class="radar-wrapper">
+                        <canvas id="canvas-skyplot"></canvas>
+                    </div>
+                    <div class="snr-wrapper">
+                        <div class="snr-header-label">卫星载噪比 / SNR (C/N0 dB-Hz)</div>
+                        <div class="snr-bars-container" id="snr-bars-container">
+                            <div class="snr-placeholder">等待接收解算数据...</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
         
         <!-- FOOTER & LEGAL -->
         <footer class="app-footer">

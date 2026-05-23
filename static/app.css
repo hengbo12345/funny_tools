@@ -949,3 +949,412 @@ input:focus, select:focus {
     }
 }
 
+/* ==========================================================================
+   TABBED NAVIGATION & RECEIVER STYLING
+   ========================================================================== */
+
+.app-tabs {
+    display: flex;
+    gap: 12px;
+    padding: 8px 12px;
+    background: rgba(13, 16, 27, 0.4);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: var(--card-shadow);
+}
+
+.tab-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    padding: 10px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tab-btn:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.tab-btn.active {
+    color: var(--accent-cyan);
+    background: rgba(0, 242, 254, 0.08);
+    border: 1px solid rgba(0, 242, 254, 0.18);
+    box-shadow: 0 0 12px rgba(0, 242, 254, 0.12);
+}
+
+.tab-icon {
+    font-size: 14px;
+}
+
+.tab-content {
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.tab-content.hidden {
+    display: none !important;
+}
+
+/* GPSTest Telemetry Board */
+.receiver-telemetry-board {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    padding: 18px;
+    background: var(--card-bg);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    margin-bottom: 20px;
+    box-shadow: var(--card-shadow);
+}
+
+.telemetry-col {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 6px 12px;
+    border-right: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.telemetry-col:last-child {
+    border-right: none;
+}
+
+.telemetry-label {
+    font-size: 9px;
+    color: var(--text-muted);
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.telemetry-value {
+    font-size: 19px;
+    font-weight: 900;
+    color: var(--text-primary);
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: -0.5px;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.telemetry-sub {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+/* Status Accents */
+.text-searching {
+    color: var(--accent-amber);
+    text-shadow: 0 0 8px rgba(245, 158, 11, 0.25);
+    animation: pulseSearching 1.5s infinite ease-in-out;
+}
+
+.text-2dfix {
+    color: var(--accent-cyan);
+    text-shadow: 0 0 8px rgba(0, 242, 254, 0.25);
+}
+
+.text-3dfix {
+    color: var(--accent-emerald);
+    text-shadow: 0 0 10px rgba(16, 185, 129, 0.35);
+    animation: breathingFix 2s infinite ease-in-out;
+}
+
+@keyframes pulseSearching {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+@keyframes breathingFix {
+    0%, 100% { text-shadow: 0 0 6px rgba(16, 185, 129, 0.2); }
+    50% { text-shadow: 0 0 14px rgba(16, 185, 129, 0.5); }
+}
+
+.sats-badges {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.sat-badge {
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+
+.sat-badge.inactive {
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-muted);
+    border: 1px solid rgba(255, 255, 255, 0.01);
+}
+
+.sat-badge.gps-badge.active {
+    background: rgba(0, 242, 254, 0.1);
+    color: var(--accent-cyan);
+    border: 1px solid rgba(0, 242, 254, 0.25);
+    box-shadow: 0 0 6px rgba(0, 242, 254, 0.15);
+}
+
+.sat-badge.bds-badge.active {
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--accent-emerald);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.15);
+}
+
+.slash {
+    color: var(--text-muted);
+    font-weight: 300;
+    margin: 0 2px;
+}
+
+/* Layout Split */
+.receiver-grid {
+    display: grid;
+    grid-template-columns: 1.3fr 1fr;
+    gap: 20px;
+}
+
+.panel-spectrometer, .panel-radar {
+    display: flex;
+    flex-direction: column;
+}
+
+.spectrometer-controls {
+    display: flex;
+    gap: 8px;
+}
+
+.canvas-container {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px;
+}
+
+.canvas-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: rgba(6, 7, 11, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.02);
+    border-radius: 12px;
+    padding: 12px;
+}
+
+.canvas-title {
+    font-size: 10px;
+    color: var(--text-secondary);
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+#canvas-spectrum, #canvas-waterfall {
+    width: 100%;
+    height: 160px;
+    border-radius: 6px;
+    background: #020306;
+    border: 1px solid rgba(255, 255, 255, 0.02);
+}
+
+/* Radar & SNR bars */
+.skyplot-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    padding: 16px;
+}
+
+.radar-wrapper {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: rgba(6, 7, 11, 0.2);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.01);
+    padding: 8px;
+    min-height: 290px;
+}
+
+#canvas-skyplot {
+    width: 100%;
+    max-width: 270px;
+    height: 270px;
+}
+
+.snr-wrapper {
+    display: flex;
+    flex-direction: column;
+    min-height: 290px;
+    background: rgba(6, 7, 11, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.02);
+    border-radius: 12px;
+    padding: 12px 14px;
+}
+
+.snr-header-label {
+    font-size: 10px;
+    color: var(--text-secondary);
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    padding-bottom: 6px;
+}
+
+.snr-bars-container {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+    flex-grow: 1;
+    max-height: 240px;
+    padding-right: 4px;
+}
+
+.snr-bars-container::-webkit-scrollbar {
+    width: 4px;
+}
+
+.snr-bars-container::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 2px;
+}
+
+.snr-placeholder {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 500;
+    text-align: center;
+    margin: auto;
+}
+
+.snr-bar-row {
+    display: grid;
+    grid-template-columns: 28px 1fr 28px;
+    align-items: center;
+    gap: 8px;
+}
+
+.snr-bar-prn {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    text-align: left;
+}
+
+.snr-bar-prn.gps {
+    color: var(--accent-cyan);
+}
+
+.snr-bar-prn.beidou {
+    color: var(--accent-emerald);
+}
+
+.snr-bar-outer {
+    height: 6px;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+    border: 1px solid rgba(255, 255, 255, 0.01);
+}
+
+.snr-bar-inner {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s ease, background 0.3s ease;
+}
+
+.snr-bar-inner.gps {
+    background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+    box-shadow: 0 0 5px rgba(0, 242, 254, 0.3);
+}
+
+.snr-bar-inner.beidou {
+    background: linear-gradient(90deg, #059669 0%, #10b981 100%);
+    box-shadow: 0 0 5px rgba(16, 185, 129, 0.3);
+}
+
+.snr-bar-inner.unused {
+    background: var(--accent-gray);
+    box-shadow: none;
+    opacity: 0.3;
+}
+
+.snr-bar-val {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-align: right;
+}
+
+/* Responsive Rules */
+@media (max-width: 1150px) {
+    .receiver-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 850px) {
+    .receiver-telemetry-board {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .telemetry-col {
+        border-right: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .telemetry-col:nth-child(n+3) {
+        border-bottom: none;
+    }
+    .skyplot-layout {
+        grid-template-columns: 1fr;
+    }
+    .radar-wrapper {
+        min-height: 250px;
+    }
+    #canvas-skyplot {
+        max-width: 240px;
+        height: 240px;
+    }
+}
+
+@media (max-width: 500px) {
+    .receiver-telemetry-board {
+        grid-template-columns: 1fr;
+    }
+    .telemetry-col {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .telemetry-col:last-child {
+        border-bottom: none;
+    }
+}
+
+

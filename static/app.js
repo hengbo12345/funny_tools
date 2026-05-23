@@ -378,6 +378,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 elements.selectSystem.disabled = true;
                 elements.selectBand.disabled = true;
                 break;
+            case 'scanning':
+                elements.simVal.textContent = "正在接收分析扫频中... (SCANNING)";
+                elements.simIndicator.className = "indicator cyan pulse";
+                elements.btnStart.disabled = false;
+                elements.btnStop.disabled = true;
+                elements.selectSystem.disabled = false;
+                elements.selectBand.disabled = false;
+                break;
             case 'error':
                 elements.simVal.textContent = "发生错误 (ERROR)";
                 elements.simIndicator.className = "indicator red pulse";
@@ -616,10 +624,627 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // -------------------------------------------------------------
+    // RECEIVER & SWEEP SPECTROMETER SYSTEM
+    // -------------------------------------------------------------
+    let receiverEventSource = null;
+    let waterfallLines = [];
+    const maxWaterfallLines = 60;
+
+    const resizeCanvases = () => {
+        const list = [
+            { canvas: document.getElementById('canvas-spectrum'), width: 1.0 },
+            { canvas: document.getElementById('canvas-waterfall'), width: 1.0 },
+            { canvas: document.getElementById('canvas-skyplot'), width: 0.0 }
+        ];
+
+        list.forEach(item => {
+            if (!item.canvas) return;
+            const rect = item.canvas.parentElement.getBoundingClientRect();
+            if (item.width > 0) {
+                item.canvas.width = rect.width * window.devicePixelRatio;
+                item.canvas.height = (rect.height || 160) * window.devicePixelRatio;
+            } else {
+                const side = Math.min(rect.width, rect.height || 270);
+                item.canvas.width = side * window.devicePixelRatio;
+                item.canvas.height = side * window.devicePixelRatio;
+            }
+        });
+    };
+
+    window.addEventListener('resize', resizeCanvases);
+
+    function drawSpectrum(low, high, width, dbs) {
+        const canvas = document.getElementById('canvas-spectrum');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width;
+        const h = canvas.height;
+
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = '#020306';
+        ctx.fillRect(0, 0, w, h);
+
+        const paddingLeft = 45 * window.devicePixelRatio;
+        const paddingRight = 15 * window.devicePixelRatio;
+        const paddingTop = 25 * window.devicePixelRatio;
+        const paddingBottom = 25 * window.devicePixelRatio;
+
+        const graphW = w - paddingLeft - paddingRight;
+        const graphH = h - paddingTop - paddingBottom;
+
+        // Draw Grid
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.03)';
+        ctx.lineWidth = 1 * window.devicePixelRatio;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.font = `${Math.round(9 * window.devicePixelRatio)}px "JetBrains Mono", monospace`;
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+
+        // dB Grid lines
+        const minDB = -90;
+        const maxDB = -30;
+        const dbSteps = [-80, -70, -60, -50, -40];
+        
+        dbSteps.forEach(db => {
+            const y = paddingTop + graphH * (1 - (db - minDB) / (maxDB - minDB));
+            ctx.beginPath();
+            ctx.moveTo(paddingLeft, y);
+            ctx.lineTo(w - paddingRight, y);
+            ctx.stroke();
+            ctx.fillText(db + ' dB', paddingLeft - 8 * window.devicePixelRatio, y);
+        });
+
+        // Frequency markers
+        const numFreqSteps = 5;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        for (let i = 0; i < numFreqSteps; i++) {
+            const frac = i / (numFreqSteps - 1);
+            const freq = low + frac * (high - low);
+            const x = paddingLeft + frac * graphW;
+            const mhz = (freq / 1000000).toFixed(1);
+            
+            ctx.beginPath();
+            ctx.moveTo(x, paddingTop);
+            ctx.lineTo(x, h - paddingBottom);
+            ctx.stroke();
+            
+            ctx.fillText(mhz + ' MHz', x, h - paddingBottom + 6 * window.devicePixelRatio);
+        }
+
+        // Draw B1I and L1 markers
+        const b1iFreq = 1561098000;
+        const l1Freq = 1575420000;
+
+        const drawMarker = (freq, label, color) => {
+            if (freq >= low && freq <= high) {
+                const frac = (freq - low) / (high - low);
+                const x = paddingLeft + frac * graphW;
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1 * window.devicePixelRatio;
+                ctx.setLineDash([4 * window.devicePixelRatio, 4 * window.devicePixelRatio]);
+                ctx.beginPath();
+                ctx.moveTo(x, paddingTop);
+                ctx.lineTo(x, h - paddingBottom);
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                ctx.fillStyle = color;
+                ctx.font = `bold ${Math.round(8 * window.devicePixelRatio)}px "Montserrat", sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.fillText(label, x, paddingTop - 12 * window.devicePixelRatio);
+            }
+        };
+
+        drawMarker(b1iFreq, 'BDS B1I', '#10b981');
+        drawMarker(l1Freq, 'GPS L1 / BDS B1C', '#00f2fe');
+
+        // Plot spectrum line
+        if (dbs && dbs.length > 0) {
+            ctx.beginPath();
+            ctx.lineWidth = 2 * window.devicePixelRatio;
+            
+            ctx.shadowBlur = 6 * window.devicePixelRatio;
+            ctx.shadowColor = '#00f2fe';
+
+            const grad = ctx.createLinearGradient(paddingLeft, 0, w - paddingRight, 0);
+            grad.addColorStop(0, '#4facfe');
+            grad.addColorStop(1, '#00f2fe');
+            ctx.strokeStyle = grad;
+
+            for (let i = 0; i < dbs.length; i++) {
+                const frac = i / (dbs.length - 1);
+                const x = paddingLeft + frac * graphW;
+                const db = Math.max(minDB, Math.min(maxDB, dbs[i]));
+                const y = paddingTop + graphH * (1 - (db - minDB) / (maxDB - minDB));
+
+                if (i === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            ctx.stroke();
+            ctx.shadowBlur = 0; // reset shadow
+        }
+    }
+
+    function drawWaterfall(dbs) {
+        const canvas = document.getElementById('canvas-waterfall');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width;
+        const h = canvas.height;
+
+        const paddingLeft = 45 * window.devicePixelRatio;
+        const paddingRight = 15 * window.devicePixelRatio;
+        const paddingTop = 2 * window.devicePixelRatio;
+        const paddingBottom = 2 * window.devicePixelRatio;
+
+        const graphW = w - paddingLeft - paddingRight;
+        const graphH = h - paddingTop - paddingBottom;
+
+        // Push new sweep line to history
+        waterfallLines.unshift(dbs);
+        if (waterfallLines.length > maxWaterfallLines) {
+            waterfallLines.pop();
+        }
+
+        ctx.fillStyle = '#020306';
+        ctx.fillRect(0, 0, w, h);
+
+        const rowH = graphH / maxWaterfallLines;
+        
+        for (let r = 0; r < waterfallLines.length; r++) {
+            const line = waterfallLines[r];
+            const y = paddingTop + r * rowH;
+
+            const cellW = graphW / line.length;
+            
+            for (let i = 0; i < line.length; i++) {
+                const db = line[i];
+                const x = paddingLeft + i * cellW;
+
+                // Color mapping: thermal gradient (low: navy, mid: green, high: red/yellow)
+                let color;
+                const normalized = Math.max(0, Math.min(1, (db + 80) / 45));
+
+                if (normalized < 0.3) {
+                    const ratio = normalized / 0.3;
+                    const red = Math.round(2 * ratio);
+                    const green = Math.round(15 * ratio + 3);
+                    const blue = Math.round(80 + 175 * ratio);
+                    color = `rgb(${red},${green},${blue})`;
+                } else if (normalized < 0.6) {
+                    const ratio = (normalized - 0.3) / 0.3;
+                    const red = 2;
+                    const green = Math.round(18 + 160 * ratio);
+                    const blue = Math.round(255 - 200 * ratio);
+                    color = `rgb(${red},${green},${blue})`;
+                } else if (normalized < 0.85) {
+                    const ratio = (normalized - 0.6) / 0.25;
+                    const red = Math.round(16 + 220 * ratio);
+                    const green = Math.round(178 + 40 * ratio);
+                    const blue = Math.round(55 - 45 * ratio);
+                    color = `rgb(${red},${green},${blue})`;
+                } else {
+                    const ratio = (normalized - 0.85) / 0.15;
+                    const red = 255;
+                    const green = Math.round(218 - 180 * ratio);
+                    const blue = 10;
+                    color = `rgb(${red},${green},${blue})`;
+                }
+
+                ctx.fillStyle = color;
+                ctx.fillRect(x, y, cellW + 1, rowH + 1);
+            }
+        }
+
+        // Draw scale axis
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+        ctx.lineWidth = 1 * window.devicePixelRatio;
+        ctx.beginPath();
+        ctx.moveTo(paddingLeft, paddingTop);
+        ctx.lineTo(paddingLeft, h - paddingBottom);
+        ctx.stroke();
+    }
+
+    function drawSkyplot(sats) {
+        const canvas = document.getElementById('canvas-skyplot');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width;
+        const h = canvas.height;
+
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = 'rgba(2, 3, 6, 0.5)';
+        ctx.fillRect(0, 0, w, h);
+
+        const centerX = w / 2;
+        const centerY = h / 2;
+        const radius = Math.min(centerX, centerY) - 16 * window.devicePixelRatio;
+
+        // Draw concentric circles
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.035)';
+        ctx.lineWidth = 1 * window.devicePixelRatio;
+        
+        const rings = [30, 60, 90];
+        rings.forEach(elev => {
+            const r = radius * (1 - elev / 90);
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, r, 0, 2 * Math.PI);
+            ctx.stroke();
+
+            if (elev < 90) {
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+                ctx.font = `${Math.round(8 * window.devicePixelRatio)}px "JetBrains Mono", monospace`;
+                ctx.fillText(elev + '°', centerX + 4 * window.devicePixelRatio, centerY - r - 2 * window.devicePixelRatio);
+            }
+        });
+
+        // Direction grid lines
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY - radius);
+        ctx.lineTo(centerX, centerY + radius);
+        ctx.moveTo(centerX - radius, centerY);
+        ctx.lineTo(centerX + radius, centerY);
+        ctx.stroke();
+
+        // Direction Labels
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.font = `bold ${Math.round(9 * window.devicePixelRatio)}px "Montserrat", sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        ctx.fillText('N', centerX, centerY - radius - 8 * window.devicePixelRatio);
+        ctx.fillText('S', centerX, centerY + radius + 8 * window.devicePixelRatio);
+        ctx.fillText('E', centerX + radius + 8 * window.devicePixelRatio, centerY);
+        ctx.fillText('W', centerX - radius - 8 * window.devicePixelRatio, centerY);
+
+        // Render satellites
+        if (sats && sats.length > 0) {
+            sats.forEach(sat => {
+                const r = radius * (1 - sat.elevation / 90);
+                const angle = (sat.azimuth * Math.PI) / 180 - Math.PI / 2;
+                const x = centerX + r * Math.cos(angle);
+                const y = centerY + r * Math.sin(angle);
+
+                const isBds = sat.system === 'beidou';
+                const baseColor = isBds ? '#10b981' : '#00f2fe';
+
+                if (sat.used) {
+                    ctx.shadowBlur = 8 * window.devicePixelRatio;
+                    ctx.shadowColor = baseColor;
+                    ctx.fillStyle = baseColor;
+                    ctx.beginPath();
+                    ctx.arc(x, y, 7 * window.devicePixelRatio, 0, 2 * Math.PI);
+                    ctx.fill();
+                    ctx.shadowBlur = 0; // reset
+                } else {
+                    ctx.strokeStyle = baseColor;
+                    ctx.lineWidth = 1.5 * window.devicePixelRatio;
+                    ctx.fillStyle = 'rgba(13, 16, 27, 0.7)';
+                    ctx.beginPath();
+                    ctx.arc(x, y, 6 * window.devicePixelRatio, 0, 2 * Math.PI);
+                    ctx.fill();
+                    ctx.stroke();
+                }
+
+                ctx.fillStyle = sat.used ? '#06070b' : '#f3f4f6';
+                ctx.font = `bold ${Math.round(8 * window.devicePixelRatio)}px "JetBrains Mono", monospace`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                
+                const prnNum = sat.prn.substring(1);
+                if (sat.used) {
+                    ctx.fillText(prnNum, x, y);
+                } else {
+                    ctx.fillStyle = 'rgba(243, 244, 246, 0.55)';
+                    ctx.fillText(sat.prn, x, y + 11 * window.devicePixelRatio);
+                }
+            });
+        }
+    }
+
+    function updateTelemetryBoard(data) {
+        const rxFixType = document.getElementById('rx-fix-type');
+        const rxAccuracy = document.getElementById('rx-accuracy');
+        const rxCoords = document.getElementById('rx-coords');
+        const rxAltitude = document.getElementById('rx-altitude');
+        const rxTime = document.getElementById('rx-time');
+        const rxTtff = document.getElementById('rx-ttff');
+        const rxSatsUsed = document.getElementById('rx-sats-used');
+        const rxSatsInView = document.getElementById('rx-sats-inview');
+        const badgeGps = document.getElementById('badge-gps');
+        const badgeBds = document.getElementById('badge-bds');
+
+        if (!rxFixType) return;
+
+        rxFixType.textContent = data.fix_type.toUpperCase() + (data.fix_type === 'Searching' ? '...' : '');
+        rxFixType.className = 'telemetry-value';
+        if (data.fix_type === 'Searching') {
+            rxFixType.classList.add('text-searching');
+        } else if (data.fix_type === '2D Fix') {
+            rxFixType.classList.add('text-2dfix');
+        } else if (data.fix_type === '3D Fix') {
+            rxFixType.classList.add('text-3dfix');
+        }
+
+        if (data.fix_type !== 'Searching') {
+            rxCoords.textContent = `${data.lat.toFixed(6)} , ${data.lng.toFixed(6)}`;
+            rxAltitude.textContent = `海拔: ${data.alt.toFixed(1)} m`;
+            rxAccuracy.textContent = `精度: ±${data.accuracy.toFixed(1)}m`;
+        } else {
+            rxCoords.textContent = '-- , --';
+            rxAltitude.textContent = '海拔: --';
+            rxAccuracy.textContent = '精度: --';
+        }
+
+        if (data.utc_time) {
+            const parts = data.utc_time.split('T');
+            if (parts.length > 1) {
+                rxTime.textContent = parts[1].replace('Z', '');
+            } else {
+                rxTime.textContent = data.utc_time;
+            }
+        }
+        rxTtff.textContent = `TTFF (冷启动): ${data.ttff.toFixed(1)} s`;
+
+        rxSatsUsed.textContent = data.sats_used;
+        rxSatsInView.textContent = data.sats_in_view;
+
+        let hasGps = false;
+        let hasBds = false;
+        if (data.satellites && data.satellites.length > 0) {
+            data.satellites.forEach(s => {
+                if (s.used) {
+                    if (s.system === 'gps') hasGps = true;
+                    if (s.system === 'beidou') hasBds = true;
+                }
+            });
+        }
+
+        if (hasGps) {
+            badgeGps.className = "sat-badge gps-badge active";
+        } else {
+            badgeGps.className = "sat-badge gps-badge inactive";
+        }
+
+        if (hasBds) {
+            badgeBds.className = "sat-badge bds-badge active";
+        } else {
+            badgeBds.className = "sat-badge bds-badge inactive";
+        }
+    }
+
+    function updateSNRBars(sats) {
+        const container = document.getElementById('snr-bars-container');
+        if (!container) return;
+
+        if (!sats || sats.length === 0) {
+            container.innerHTML = '<div class="snr-placeholder">等待接收解算数据...</div>';
+            return;
+        }
+
+        const sorted = [...sats].sort((a, b) => a.prn.localeCompare(b.prn));
+        
+        container.innerHTML = '';
+        sorted.forEach(sat => {
+            const row = document.createElement('div');
+            row.className = 'snr-bar-row';
+
+            const prnDiv = document.createElement('div');
+            prnDiv.className = `snr-bar-prn ${sat.system}`;
+            prnDiv.textContent = sat.prn;
+
+            const barOuter = document.createElement('div');
+            barOuter.className = 'snr-bar-outer';
+
+            const barInner = document.createElement('div');
+            barInner.className = `snr-bar-inner ${sat.system}`;
+            if (!sat.used) {
+                barInner.classList.add('unused');
+            }
+            const percent = Math.max(0, Math.min(100, ((sat.snr - 10) / 45) * 100));
+            barInner.style.width = `${percent}%`;
+
+            barOuter.appendChild(barInner);
+
+            const valDiv = document.createElement('div');
+            valDiv.className = 'snr-bar-val';
+            valDiv.textContent = Math.round(sat.snr);
+
+            row.appendChild(prnDiv);
+            row.appendChild(barOuter);
+            row.appendChild(valDiv);
+
+            container.appendChild(row);
+        });
+    }
+
+    async function startReceiverScan() {
+        const btnStart = document.getElementById('btn-rx-start');
+        const btnStop = document.getElementById('btn-rx-stop');
+
+        const params = {
+            lat: parseFloat(elements.inputLat.value) || 39.9042,
+            lng: parseFloat(elements.inputLng.value) || 116.4074,
+            alt: parseFloat(elements.inputAlt.value) || 100.0
+        };
+
+        btnStart.disabled = true;
+        btnStart.textContent = "启动中...";
+
+        try {
+            const response = await authedFetch('/api/receiver/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(params)
+            });
+
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text);
+            }
+
+            addConsoleLine("🔍 卫星信号接收仪已成功启动，正在建立高频遥测通道...", "success");
+            btnStop.disabled = false;
+            btnStart.textContent = "启动接收扫频";
+            
+            connectReceiverSSE();
+            pollStatus();
+        } catch (error) {
+            btnStart.disabled = false;
+            btnStart.textContent = "启动接收扫频";
+            alert(`启动扫频失败: ${error.message}`);
+            addConsoleLine(`❌ 启动接收仪失败: ${error.message}`, "error");
+        }
+    }
+
+    async function stopReceiverScan() {
+        const btnStart = document.getElementById('btn-rx-start');
+        const btnStop = document.getElementById('btn-rx-stop');
+
+        btnStop.disabled = true;
+
+        try {
+            const response = await authedFetch('/api/receiver/stop', { method: 'POST' });
+            if (!response.ok) throw new Error("Stop request failed");
+
+            addConsoleLine("🔍 接收分析仪停止指令已执行。", "system");
+            
+            if (receiverEventSource) {
+                receiverEventSource.close();
+                receiverEventSource = null;
+            }
+
+            btnStart.disabled = false;
+            resetReceiverUI();
+            pollStatus();
+        } catch (error) {
+            btnStop.disabled = false;
+            alert(`停止扫频失败: ${error.message}`);
+        }
+    }
+
+    function resetReceiverUI() {
+        const rxFixType = document.getElementById('rx-fix-type');
+        const rxAccuracy = document.getElementById('rx-accuracy');
+        const rxCoords = document.getElementById('rx-coords');
+        const rxAltitude = document.getElementById('rx-altitude');
+        const rxTime = document.getElementById('rx-time');
+        const rxSatsUsed = document.getElementById('rx-sats-used');
+        const rxSatsInView = document.getElementById('rx-sats-inview');
+        const badgeGps = document.getElementById('badge-gps');
+        const badgeBds = document.getElementById('badge-bds');
+        const container = document.getElementById('snr-bars-container');
+
+        if (rxFixType) {
+            rxFixType.textContent = "SEARCHING...";
+            rxFixType.className = "telemetry-value text-searching";
+        }
+        if (rxAccuracy) rxAccuracy.textContent = "精度: --";
+        if (rxCoords) rxCoords.textContent = "-- , --";
+        if (rxAltitude) rxAltitude.textContent = "海拔: --";
+        if (rxTime) rxTime.textContent = "--:--:--.--";
+        if (rxSatsUsed) rxSatsUsed.textContent = "0";
+        if (rxSatsInView) rxSatsInView.textContent = "0";
+        if (badgeGps) badgeGps.className = "sat-badge gps-badge inactive";
+        if (badgeBds) badgeBds.className = "sat-badge bds-badge inactive";
+        if (container) container.innerHTML = '<div class="snr-placeholder">等待接收解算数据...</div>';
+
+        const canvasSpectrum = document.getElementById('canvas-spectrum');
+        const canvasWaterfall = document.getElementById('canvas-waterfall');
+        const canvasSkyplot = document.getElementById('canvas-skyplot');
+
+        if (canvasSpectrum) {
+            const ctx = canvasSpectrum.getContext('2d');
+            ctx.clearRect(0, 0, canvasSpectrum.width, canvasSpectrum.height);
+        }
+        if (canvasWaterfall) {
+            const ctx = canvasWaterfall.getContext('2d');
+            ctx.clearRect(0, 0, canvasWaterfall.width, canvasWaterfall.height);
+        }
+        if (canvasSkyplot) {
+            const ctx = canvasSkyplot.getContext('2d');
+            ctx.clearRect(0, 0, canvasSkyplot.width, canvasSkyplot.height);
+        }
+
+        waterfallLines = [];
+    }
+
+    function connectReceiverSSE() {
+        if (receiverEventSource) {
+            receiverEventSource.close();
+        }
+
+        const token = localStorage.getItem('gps_sim_token');
+        const sseUrl = token ? `/api/receiver/stream?token=${encodeURIComponent(token)}` : '/api/receiver/stream';
+
+        receiverEventSource = new EventSource(sseUrl);
+
+        receiverEventSource.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'sweep') {
+                    drawSpectrum(data.low, data.high, data.width, data.dbs);
+                    drawWaterfall(data.dbs);
+                } else if (data.type === 'telemetry') {
+                    updateTelemetryBoard(data);
+                    drawSkyplot(data.satellites);
+                    updateSNRBars(data.satellites);
+                }
+            } catch (err) {
+                console.error("Failed to parse receiver SSE message:", err);
+            }
+        };
+
+        receiverEventSource.onerror = (err) => {
+            console.error("Receiver EventSource error:", err);
+        };
+    }
+
+    // -------------------------------------------------------------
     // EVENT LISTENERS BINDING
     // -------------------------------------------------------------
 
     function setupEventListeners() {
+        // Tab switching controls
+        const tabBtnTx = document.getElementById('tab-btn-tx');
+        const tabBtnRx = document.getElementById('tab-btn-rx');
+        const tabContentTx = document.getElementById('tab-content-tx');
+        const tabContentRx = document.getElementById('tab-content-rx');
+
+        if (tabBtnTx && tabBtnRx) {
+            tabBtnTx.addEventListener('click', () => {
+                tabBtnTx.classList.add('active');
+                tabBtnRx.classList.remove('active');
+                tabContentTx.classList.remove('hidden');
+                tabContentRx.classList.add('hidden');
+                if (map) {
+                    setTimeout(() => map.invalidateSize(), 50);
+                }
+            });
+
+            tabBtnRx.addEventListener('click', () => {
+                tabBtnRx.classList.add('active');
+                tabBtnTx.classList.remove('active');
+                tabContentRx.classList.remove('hidden');
+                tabContentTx.classList.add('hidden');
+                resizeCanvases();
+            });
+        }
+
+        // Receiver sweep controls
+        const btnRxStart = document.getElementById('btn-rx-start');
+        const btnRxStop = document.getElementById('btn-rx-stop');
+
+        if (btnRxStart && btnRxStop) {
+            btnRxStart.addEventListener('click', startReceiverScan);
+            btnRxStop.addEventListener('click', stopReceiverScan);
+        }
+
         // Start and stop controls
         elements.btnStart.addEventListener('click', startSimulation);
         elements.btnStop.addEventListener('click', stopSimulation);
