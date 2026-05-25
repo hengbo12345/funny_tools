@@ -299,22 +299,118 @@ func runSimulationFlow(simPath string, lat, lng, alt float64, duration, gain int
 	// Step 1: Execute simulation tool to generate binary
 	logBroker.Broadcast("---------------- [1/2] 正在生成基带仿真信号 ----------------")
 	
-	latStr := fmt.Sprintf("%f", lat)
-	lngStr := fmt.Sprintf("%f", lng)
-	altStr := fmt.Sprintf("%f", alt)
-	durStr := fmt.Sprintf("%d", duration)
+	var cmd *exec.Cmd
+	if band == "B1C" {
+		presetPath := "data/b1c_preset.json"
+		// Generate preset
+		presetTime := parseEphemerisTime(ephemeris)
+		preset := PresetConfig{
+			Version:     1.0,
+			Description: "BDS B1C Simulation Preset",
+			Time: PresetTime{
+				Type:   "UTC",
+				Year:   presetTime.Year(),
+				Month:  int(presetTime.Month()),
+				Day:    presetTime.Day(),
+				Hour:   presetTime.Hour(),
+				Minute: presetTime.Minute(),
+				Second: presetTime.Second(),
+			},
+			Trajectory: PresetTrajectory{
+				Name: "Static Scenario",
+				InitPosition: PresetPosition{
+					Type:      "LLA",
+					Format:    "d",
+					Longitude: lng,
+					Latitude:  lat,
+					Altitude:  alt,
+				},
+				InitVelocity: PresetVelocity{
+					Type:   "SCU",
+					Speed:  0,
+					Course: 0,
+				},
+				TrajectoryList: []TrajectoryItem{
+					{
+						Type: "Const",
+						Time: float64(duration),
+					},
+				},
+			},
+			Ephemeris: PresetEphemeris{
+				Type: "RINEX",
+				Name: ephemerisPath,
+			},
+			Output: PresetOutput{
+				Type:       "IFdata",
+				Format:     "IQ8",
+				SampleFreq: 2.6, // 2.6 MHz sample rate for HackRF
+				CenterFreq: 1575.42,
+				Name:       binPath,
+				Config: OutputConfig{
+					ElevationMask: 5,
+				},
+				SystemSelect: []SystemSelectItem{
+					{System: "GPS", Signal: "L1CA", Enable: false},
+					{System: "GPS", Signal: "L1C", Enable: false},
+					{System: "GPS", Signal: "L2C", Enable: false},
+					{System: "GPS", Signal: "L2P", Enable: false},
+					{System: "GPS", Signal: "L5", Enable: false},
+					{System: "BDS", Signal: "B1C", Enable: true},
+					{System: "BDS", Signal: "B1I", Enable: false},
+					{System: "BDS", Signal: "B2a", Enable: false},
+					{System: "BDS", Signal: "B2I", Enable: false},
+					{System: "BDS", Signal: "B2b", Enable: false},
+					{System: "BDS", Signal: "B3I", Enable: false},
+					{System: "Galileo", Signal: "E1", Enable: false},
+					{System: "Galileo", Signal: "E5a", Enable: false},
+					{System: "Galileo", Signal: "E5b", Enable: false},
+					{System: "Galileo", Signal: "E6", Enable: false},
+					{System: "GLONASS", Signal: "G1", Enable: false},
+					{System: "GLONASS", Signal: "G2", Enable: false},
+					{System: "GLONASS", Signal: "G3", Enable: false},
+				},
+			},
+			Power: PresetPower{
+				NoiseFloor: -172,
+				InitPower: InitPower{
+					Unit:  "dBHz",
+					Value: 45,
+				},
+				ElevationAdjust: true,
+			},
+		}
 
-	cmdArgs := []string{
-		"-b", "8",
-		"-e", ephemerisPath,
-		"-l", fmt.Sprintf("%s,%s,%s", latStr, lngStr, altStr),
-		"-d", durStr,
-		"-o", binPath,
+		jsonData, err := json.MarshalIndent(preset, "", "  ")
+		if err != nil {
+			handleFlowError(fmt.Sprintf("序列化 Preset JSON 失败: %v", err))
+			return
+		}
+		if err := os.WriteFile(presetPath, jsonData, 0644); err != nil {
+			handleFlowError(fmt.Sprintf("写入 Preset JSON 失败: %v", err))
+			return
+		}
+
+		logBroker.Broadcast(fmt.Sprintf("已成功为 Rust 发生器生成 Scenario 配置文件: %s", presetPath))
+		logBroker.Broadcast(fmt.Sprintf("执行命令: %s %s", simPath, presetPath))
+		cmd = exec.Command(simPath, presetPath)
+	} else {
+		latStr := fmt.Sprintf("%f", lat)
+		lngStr := fmt.Sprintf("%f", lng)
+		altStr := fmt.Sprintf("%f", alt)
+		durStr := fmt.Sprintf("%d", duration)
+
+		cmdArgs := []string{
+			"-b", "8",
+			"-e", ephemerisPath,
+			"-l", fmt.Sprintf("%s,%s,%s", latStr, lngStr, altStr),
+			"-d", durStr,
+			"-o", binPath,
+		}
+
+		logBroker.Broadcast(fmt.Sprintf("执行命令: %s %s", simPath, strings.Join(cmdArgs, " ")))
+		cmd = exec.Command(simPath, cmdArgs...)
 	}
-
-	logBroker.Broadcast(fmt.Sprintf("执行命令: %s %s", simPath, strings.Join(cmdArgs, " ")))
-	
-	cmd := exec.Command(simPath, cmdArgs...)
 	
 	stateMutex.Lock()
 	activeCmd = cmd
@@ -568,11 +664,10 @@ func triggerSystemSetup() {
 				srcBin := filepath.Join(buildDir, "beidou-sdr-sim")
 				
 				err1 := copyBinary(srcBin, "./beidou-sdr-sim")
-				err2 := copyBinary(srcBin, "./beidou-sdr-sim-b1c")
 				err3 := copyBinary(srcBin, "./beidou-sdr-sim-b2a")
 				
-				if err1 == nil && err2 == nil && err3 == nil {
-					logBroker.Broadcast("✅ beidou-sdr-sim 北斗多频段信号生成器编译并部署成功（包含 B1I, B1C, B2a 副本）！")
+				if err1 == nil && err3 == nil {
+					logBroker.Broadcast("✅ beidou-sdr-sim 北斗 B1I 和 B2a 信号发生器编译并部署成功！")
 				} else {
 					logBroker.Broadcast("❌ 部署 beidou-sdr-sim 副本失败")
 				}
@@ -581,6 +676,52 @@ func triggerSystemSetup() {
 		_ = os.RemoveAll(buildDir)
 	} else {
 		logBroker.Broadcast(fmt.Sprintf("✅ 检测到系统中已有可用的 beidou-sdr-sim (%s)，无需重新编译。", beidouSimPath))
+	}
+
+	// 3. Clone and compile gnss-signal-simulator-rs locally for B1C if it does not exist
+	b1cSimPath := findSimTool("beidou-sdr-sim-b1c")
+	if b1cSimPath == "" {
+		logBroker.Broadcast("检测到系统中未找到 beidou-sdr-sim-b1c (gnss-signal-simulator) 可执行程序，正在进行本地自动下载与编译...")
+		
+		_, cargoErr := exec.LookPath("cargo")
+		if cargoErr != nil {
+			logBroker.Broadcast("❌ 自动配置失败：未在系统 PATH 中检测到 Rust 编译环境 'cargo'。")
+			logBroker.Broadcast("💡 提示：如需支持北斗 B1C 真正的商业信号仿真，请先安装 Rust 环境：https://rustup.rs/")
+		} else {
+			buildDir := "data/gnss-signal-simulator-rs-build"
+			_ = os.RemoveAll(buildDir)
+
+			logBroker.Broadcast("正在从 GitHub 克隆 Rust 基带发生器: https://github.com/danusha2345/gnss-signal-simulator-rs.git ...")
+			cloneCmd := exec.Command("git", "clone", "--depth", "1", "https://github.com/danusha2345/gnss-signal-simulator-rs.git", buildDir)
+			if err := cloneCmd.Run(); err != nil {
+				logBroker.Broadcast(fmt.Sprintf("❌ 克隆 gnss-signal-simulator-rs 失败: %v", err))
+			} else {
+				logBroker.Broadcast("正在通过 Cargo 编译 gnss-signal-simulator (这可能需要 1-2 分钟)...")
+				cargoCmd := exec.Command("cargo", "build", "--release", "--bin", "gnss_rust")
+				cargoCmd.Dir = buildDir
+				var cargoErr bytes.Buffer
+				cargoCmd.Stderr = &cargoErr
+				if err := cargoCmd.Run(); err != nil {
+					logBroker.Broadcast(fmt.Sprintf("❌ 编译 Rust 发生器失败: %s. 请检查您的 Rust/Cargo 环境。", cargoErr.String()))
+				} else {
+					ext := ""
+					if runtime.GOOS == "windows" {
+						ext = ".exe"
+					}
+					srcBin := filepath.Join(buildDir, "target", "release", "gnss_rust"+ext)
+					destBin := "./beidou-sdr-sim-b1c" + ext
+					
+					if err := copyBinary(srcBin, destBin); err == nil {
+						logBroker.Broadcast("✅ beidou-sdr-sim-b1c (gnss-signal-simulator) 北斗 B1C 发生器编译并部署成功！")
+					} else {
+						logBroker.Broadcast(fmt.Sprintf("❌ 部署 beidou-sdr-sim-b1c 失败: %v", err))
+					}
+				}
+			}
+			_ = os.RemoveAll(buildDir)
+		}
+	} else {
+		logBroker.Broadcast(fmt.Sprintf("✅ 检测到系统中已有可用的 beidou-sdr-sim-b1c (%s)，无需重新编译。", b1cSimPath))
 	}
 	
 	logBroker.Broadcast("=================== 依赖配置环境完成 ===================")
@@ -592,4 +733,120 @@ func copyBinary(src, dest string) error {
 		return err
 	}
 	return os.WriteFile(dest, input, 0755)
+}
+
+// gnss-signal-simulator-rs preset JSON configuration structs
+type PresetTime struct {
+	Type   string `json:"type"`
+	Year   int    `json:"year"`
+	Month  int    `json:"month"`
+	Day    int    `json:"day"`
+	Hour   int    `json:"hour"`
+	Minute int    `json:"minute"`
+	Second int    `json:"second"`
+}
+
+type PresetPosition struct {
+	Type      string  `json:"type"`
+	Format    string  `json:"format"`
+	Longitude float64 `json:"longitude"`
+	Latitude  float64 `json:"latitude"`
+	Altitude  float64 `json:"altitude"`
+}
+
+type PresetVelocity struct {
+	Type   string  `json:"type"`
+	Speed  float64 `json:"speed"`
+	Course float64 `json:"course"`
+}
+
+type TrajectoryItem struct {
+	Type string  `json:"type"`
+	Time float64 `json:"time"`
+}
+
+type PresetTrajectory struct {
+	Name           string           `json:"name"`
+	InitPosition   PresetPosition   `json:"initPosition"`
+	InitVelocity   PresetVelocity   `json:"initVelocity"`
+	TrajectoryList []TrajectoryItem `json:"trajectoryList"`
+}
+
+type PresetEphemeris struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
+}
+
+type SystemSelectItem struct {
+	System string `json:"system"`
+	Signal string `json:"signal"`
+	Enable bool   `json:"enable"`
+}
+
+type OutputConfig struct {
+	ElevationMask int `json:"elevationMask"`
+}
+
+type PresetOutput struct {
+	Type         string             `json:"type"`
+	Format       string             `json:"format"`
+	SampleFreq   float64            `json:"sampleFreq"`
+	CenterFreq   float64            `json:"centerFreq"`
+	Name         string             `json:"name"`
+	Config       OutputConfig       `json:"config"`
+	SystemSelect []SystemSelectItem `json:"systemSelect"`
+}
+
+type InitPower struct {
+	Unit  string  `json:"unit"`
+	Value float64 `json:"value"`
+}
+
+type PresetPower struct {
+	NoiseFloor      float64   `json:"noiseFloor"`
+	InitPower       InitPower `json:"initPower"`
+	ElevationAdjust bool      `json:"elevationAdjust"`
+}
+
+type PresetConfig struct {
+	Version     float64          `json:"version"`
+	Description string           `json:"description"`
+	Time        PresetTime       `json:"time"`
+	Trajectory  PresetTrajectory `json:"trajectory"`
+	Ephemeris   PresetEphemeris  `json:"ephemeris"`
+	Output      PresetOutput     `json:"output"`
+	Power       PresetPower      `json:"power"`
+}
+
+func parseEphemerisTime(filename string) time.Time {
+	filename = filepath.Base(filename)
+	// Try parsing BKG format: BRDC00IGS_R_YYYYDDD...
+	if strings.HasPrefix(filename, "BRDC00IGS_R_") && len(filename) >= 21 {
+		yearStr := filename[12:16]
+		doyStr := filename[16:19]
+		year, err1 := strconv.Atoi(yearStr)
+		doy, err2 := strconv.Atoi(doyStr)
+		if err1 == nil && err2 == nil {
+			t := time.Date(year, 1, 1, 12, 0, 0, 0, time.UTC) // mid day
+			return t.AddDate(0, 0, doy-1)
+		}
+	}
+	// Try parsing NOAA format: brdcDDD0.YYn
+	if strings.HasPrefix(filename, "brdc") && len(filename) >= 11 {
+		doyStr := filename[4:7]
+		// Find the dot, then get the 2 chars after
+		dotIdx := strings.LastIndex(filename, ".")
+		if dotIdx != -1 && len(filename) >= dotIdx+3 {
+			yyStr := filename[dotIdx+1 : dotIdx+3]
+			doy, err1 := strconv.Atoi(doyStr)
+			yy, err2 := strconv.Atoi(yyStr)
+			if err1 == nil && err2 == nil {
+				year := 2000 + yy
+				t := time.Date(year, 1, 1, 12, 0, 0, 0, time.UTC) // mid day
+				return t.AddDate(0, 0, doy-1)
+			}
+		}
+	}
+	// Default to current time if parsing fails
+	return time.Now().UTC()
 }
