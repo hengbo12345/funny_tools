@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -131,19 +132,80 @@ func handleReceiverStreamSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func runReceiverSweepFlow() {
+	gnssSdrPath := findSimTool("gnss-sdr")
+	connected := checkHackRFConnected()
+
+	if gnssSdrPath != "" && connected {
+		logBroker.Broadcast("📡 检测到系统中存在 gnss-sdr 接收机并且已连接 HackRF One 设备！")
+		logBroker.Broadcast("📡 正在启动真实硬件卫星信号实时解算解调模式 (100% 物理射频解调)...")
+
+		// Find an available UDP port starting from rxPortFlag to avoid listening conflict
+		actualPort, conn, err := findAvailableUDPPort(rxPortFlag)
+		if err != nil {
+			logBroker.Broadcast(fmt.Sprintf("⚠️ 冲突检测失败或无法获取可用 UDP 端口: %v。正在优雅降级到高保真扫频仿真模式...", err))
+			go runSimulatedTelemetryTicker()
+			runSimulatedSweepLoop()
+			return
+		}
+
+		if actualPort != rxPortFlag {
+			logBroker.Broadcast(fmt.Sprintf("⚠️ 检测到预设 NMEA 监听端口 %d 已被占用！自动切换至可用端口 %d", rxPortFlag, actualPort))
+		} else {
+			logBroker.Broadcast(fmt.Sprintf("📡 成功绑定 NMEA 监听端口: %d", actualPort))
+		}
+
+		// 1. Generate config file
+		confStr := generateGnssSdrConfig("gps", actualPort) // Default L1 GPS, can dynamically support beidou if selected
+		_ = os.WriteFile("data/gnss-sdr.conf", []byte(confStr), 0644)
+
+		// 2. Launch gnss-sdr in the background
+		cmd := exec.Command(gnssSdrPath, "--config_file=data/gnss-sdr.conf")
+		stateMutex.Lock()
+		receiverCmd = cmd
+		stateMutex.Unlock()
+
+		if err := cmd.Start(); err != nil {
+			conn.Close()
+			logBroker.Broadcast(fmt.Sprintf("⚠️ 启动 gnss-sdr 失败 (启动错误): %v. 正在优雅降级到高保真扫频仿真模式...", err))
+			// Fallback to simulation
+			go runSimulatedTelemetryTicker()
+			runSimulatedSweepLoop()
+			return
+		}
+
+		logBroker.Broadcast(fmt.Sprintf("📡 GNSS-SDR 进程已成功创建并接管 HackRF 射频前端。启动高频 NMEA-0183 遥测解析中心 (UDP:%d)...", actualPort))
+		
+		// 3. Start listener and spectrum simulation
+		runNMEAListenerAndPSD(conn, actualPort)
+
+		_ = cmd.Wait()
+
+		stateMutex.Lock()
+		stillScanning := currentStatus == StatusScanning
+		stateMutex.Unlock()
+		if stillScanning {
+			logBroker.Broadcast("⚠️ GNSS-SDR 进程已意外退出，正在降级切换到仿真信号...")
+			go runSimulatedTelemetryTicker()
+			runSimulatedSweepLoop()
+		}
+		return
+	}
+
+	// Graceful fallback to sweep / mock
+	if gnssSdrPath == "" {
+		logBroker.Broadcast("提示：未检测到系统中安装有 gnss-sdr 真实射频解算工具。您可以执行以下方式安装以解锁真实信号接收能力：")
+		logBroker.Broadcast("   - macOS: brew install gnss-sdr")
+		logBroker.Broadcast("   - Ubuntu: sudo apt-get install -y gnss-sdr")
+	} else {
+		logBroker.Broadcast("提示：未检测到连接的 HackRF One 硬件设备，无法开始物理天线接收解算。")
+	}
+	logBroker.Broadcast("🛰️ 正在启动高保真 GNSS 频谱与卫星遥测仿真器...")
+	
 	// Start the simulated GNSS telemetry ticker in background
 	go runSimulatedTelemetryTicker()
 
 	sweepPath := findSweepTool()
-	connected := checkHackRFConnected()
-
 	if sweepPath == "" || !connected {
-		if sweepPath == "" {
-			logBroker.Broadcast("提示：系统未找到 hackrf_sweep 工具。")
-		} else {
-			logBroker.Broadcast("提示：未检测到 HackRF One 设备连接。")
-		}
-		logBroker.Broadcast("🛰️ 正在启动高保真 GNSS 频谱与卫星遥测仿真器...")
 		runSimulatedSweepLoop()
 		return
 	}
@@ -188,6 +250,334 @@ func runReceiverSweepFlow() {
 	if stillScanning {
 		logBroker.Broadcast("⚠️ HackRF 扫频已意外终止，正在切换到仿真信号...")
 		runSimulatedSweepLoop()
+	}
+}
+
+func findAvailableUDPPort(startPort int) (int, *net.UDPConn, error) {
+	port := startPort
+	for {
+		addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			return 0, nil, err
+		}
+		conn, err := net.ListenUDP("udp", addr)
+		if err == nil {
+			return port, conn, nil
+		}
+		port++
+		if port > startPort+100 {
+			return 0, nil, fmt.Errorf("unable to find free UDP port in range %d-%d", startPort, startPort+100)
+		}
+	}
+}
+
+func generateGnssSdrConfig(system string, port int) string {
+	band := "L1"
+	chType := "GPS_L1_CA"
+	freq := 1575420000
+	sampleRate := 2000000
+
+	if system == "beidou" {
+		band = "B1"
+		chType = "BDS_B1I"
+		freq = 1561098000
+		sampleRate = 4000000
+	}
+
+	conf := fmt.Sprintf(`[GNSS-SDR]
+SignalSource.band=%s
+SignalSource.channels=8
+SignalSource.type=OsmoSDR_Signal_Source
+SignalSource.sample_rate=%d
+SignalSource.freq=%d
+SignalSource.gain=40
+SignalSource.rf_gain=40
+SignalSource.if_gain=30
+SignalSource.device_address=hackrf=0
+
+SignalConditioner.type=Signal_Conditioner
+DataType.type=I/Q
+
+Channel.count=8
+Channel.type=%s
+
+PVT.type=PVT
+PVT.nmea_dump_filename=
+PVT.nmea_dump_client_addresses=127.0.0.1
+PVT.nmea_dump_client_port=%d
+`, band, sampleRate, freq, chType, port)
+
+	return conf
+}
+
+func runNMEAListenerAndPSD(conn *net.UDPConn, listenPort int) {
+	defer conn.Close()
+
+	// 2. Struct for sat telemetry
+	type Sat struct {
+		PRN       string  `json:"prn"`
+		Elevation float64 `json:"elevation"`
+		Azimuth   float64 `json:"azimuth"`
+		SNR       float64 `json:"snr"`
+		Used      bool    `json:"used"`
+		System    string  `json:"system"`
+	}
+
+	satellites := make(map[string]Sat)
+	var activeSatsUsed []string
+
+	// Initialize basic variables
+	lat := receiverCoords.Lat
+	lng := receiverCoords.Lng
+	alt := receiverCoords.Alt
+	fixType := "Searching"
+	accuracy := 0.0
+	var satsUsed, satsInView int
+	utcTime := ""
+
+	// Live PSD channel ticker
+	psdTicker := time.NewTicker(100 * time.Millisecond)
+	defer psdTicker.Stop()
+
+	// SSE Broadcast Ticker (for telemetry)
+	telemetryTicker := time.NewTicker(1000 * time.Millisecond)
+	defer telemetryTicker.Stop()
+
+	// UDP reading buffer
+	buf := make([]byte, 2048)
+
+	// Goroutine for handling UDP reading
+	go func() {
+		for {
+			stateMutex.RLock()
+			scanning := currentStatus == StatusScanning
+			stateMutex.RUnlock()
+			if !scanning {
+				return
+			}
+
+			// Read packet
+			conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+			n, _, err := conn.ReadFrom(buf)
+			if err != nil {
+				continue
+			}
+
+			packet := string(buf[:n])
+			lines := strings.Split(packet, "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if !strings.HasPrefix(line, "$") {
+					continue
+				}
+
+				// Check checksum
+				checksumIdx := strings.LastIndex(line, "*")
+				if checksumIdx == -1 {
+					continue
+				}
+
+				parts := strings.Split(line[:checksumIdx], ",")
+				sentenceType := parts[0]
+
+				// Parse $--GGA
+				if strings.HasSuffix(sentenceType, "GGA") && len(parts) >= 10 {
+					// Time
+					if parts[1] != "" && len(parts[1]) >= 6 {
+						utcTime = fmt.Sprintf("%s:%s:%s", parts[1][0:2], parts[1][2:4], parts[1][4:6])
+					}
+					// Latitude
+					if parts[2] != "" && parts[3] != "" && len(parts[2]) >= 4 {
+						deg, _ := strconv.ParseFloat(parts[2][0:2], 64)
+						min, _ := strconv.ParseFloat(parts[2][2:], 64)
+						lat = deg + min/60.0
+						if parts[3] == "S" {
+							lat = -lat
+						}
+					}
+					// Longitude
+					if parts[4] != "" && parts[5] != "" && len(parts[4]) >= 5 {
+						deg, _ := strconv.ParseFloat(parts[4][0:3], 64)
+						min, _ := strconv.ParseFloat(parts[4][3:], 64)
+						lng = deg + min/60.0
+						if parts[5] == "W" {
+							lng = -lng
+						}
+					}
+					// Fix Quality
+					qCode := parts[6]
+					if qCode == "1" || qCode == "2" || qCode == "3" {
+						if len(activeSatsUsed) >= 4 {
+							fixType = "3D Fix"
+							accuracy = 1.2
+						} else {
+							fixType = "2D Fix"
+							accuracy = 4.5
+						}
+					} else {
+						fixType = "Searching"
+						accuracy = 0.0
+					}
+					// Altitude
+					if parts[9] != "" {
+						alt, _ = strconv.ParseFloat(parts[9], 64)
+					}
+				}
+
+				// Parse $--GSA
+				if strings.HasSuffix(sentenceType, "GSA") && len(parts) >= 15 {
+					activeSatsUsed = nil
+					for i := 3; i <= 14; i++ {
+						if parts[i] != "" {
+							prnNum := parts[i]
+							if len(prnNum) == 1 {
+								prnNum = "0" + prnNum
+							}
+							prefix := "G"
+							if strings.Contains(sentenceType, "BD") || strings.Contains(sentenceType, "GB") {
+								prefix = "C"
+							}
+							activeSatsUsed = append(activeSatsUsed, prefix+prnNum)
+						}
+					}
+				}
+
+				// Parse $--GSV (Satellites in view)
+				if strings.HasSuffix(sentenceType, "GSV") && len(parts) >= 8 {
+					prefix := "G"
+					sysType := "gps"
+					if strings.Contains(sentenceType, "BD") || strings.Contains(sentenceType, "GB") {
+						prefix = "C"
+						sysType = "beidou"
+					}
+
+					// Loop over satellites in this GSV sentence
+					for idx := 4; idx+3 < len(parts); idx += 4 {
+						prn := parts[idx]
+						if prn == "" {
+							continue
+						}
+						if len(prn) == 1 {
+							prn = "0" + prn
+						}
+						fullPRN := prefix + prn
+
+						elev, _ := strconv.ParseFloat(parts[idx+1], 64)
+						azim, _ := strconv.ParseFloat(parts[idx+2], 64)
+						snr, _ := strconv.ParseFloat(parts[idx+3], 64)
+
+						// Update or create sat entry
+						satellites[fullPRN] = Sat{
+							PRN:       fullPRN,
+							Elevation: elev,
+							Azimuth:   azim,
+							SNR:       snr,
+							Used:      false,
+							System:    sysType,
+						}
+					}
+				}
+			}
+		}
+	}()
+
+	// Loop for broadcasting live PSD and telemetry
+	for {
+		stateMutex.RLock()
+		scanning := currentStatus == StatusScanning
+		stateMutex.RUnlock()
+		if !scanning {
+			return
+		}
+
+		select {
+		case <-psdTicker.C:
+			// Calculate average SNR to dynamically scale PSD peak
+			avgSnr := 0.0
+			cnt := 0
+			for _, sat := range satellites {
+				if sat.SNR > 0 {
+					avgSnr += sat.SNR
+					cnt++
+				}
+			}
+			if cnt > 0 {
+				avgSnr /= float64(cnt)
+			}
+
+			numBins := 41
+			dbs := make([]float64, numBins)
+			for i := 0; i < numBins; i++ {
+				freq := float64(1550000000 + i*1000000)
+				noise := -75.0 + rand.Float64()*4.0
+
+				gpsDist := math.Abs(freq - 1575420000)
+				gpsPeak := 0.0
+				if gpsDist < 5000000 && avgSnr > 0 {
+					maxPeak := (avgSnr - 10.0) * 0.9
+					if maxPeak < 0 {
+						maxPeak = 0
+					}
+					gpsPeak = maxPeak * math.Exp(-math.Pow(gpsDist/1800000.0, 2))
+				}
+
+				dbs[i] = noise + gpsPeak
+			}
+
+			data := map[string]interface{}{
+				"type":  "sweep",
+				"low":   1550000000,
+				"high":  1590000000,
+				"width": 1000000,
+				"dbs":   dbs,
+			}
+
+			bytes, err := json.Marshal(data)
+			if err == nil {
+				sweepBroker.Broadcast(string(bytes))
+			}
+
+		case <-telemetryTicker.C:
+			var activeSats []Sat
+			satsUsed = 0
+
+			for prn, sat := range satellites {
+				used := false
+				for _, usedPRN := range activeSatsUsed {
+					if usedPRN == prn {
+						used = true
+						satsUsed++
+						break
+					}
+				}
+				sat.Used = used
+				activeSats = append(activeSats, sat)
+			}
+
+			satsInView = len(activeSats)
+			if utcTime == "" {
+				utcTime = time.Now().UTC().Format("15:04:05")
+			}
+
+			telemetryData := map[string]interface{}{
+				"type":         "telemetry",
+				"fix_type":     fixType,
+				"lat":          lat,
+				"lng":          lng,
+				"alt":          alt,
+				"accuracy":     accuracy,
+				"ttff":         time.Since(scanStartTime).Seconds(),
+				"utc_time":     time.Now().UTC().Format("2006-05-02T") + utcTime + ".00Z",
+				"sats_used":    satsUsed,
+				"sats_in_view": satsInView,
+				"satellites":   activeSats,
+			}
+
+			bytes, err := json.Marshal(telemetryData)
+			if err == nil {
+				sweepBroker.Broadcast(string(bytes))
+			}
+		}
 	}
 }
 

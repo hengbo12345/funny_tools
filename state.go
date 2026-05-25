@@ -81,9 +81,10 @@ type SystemStatus struct {
 
 // Global variables for CLI flags and state
 var (
-	hostFlag  string
-	portFlag  int
-	tokenFlag string
+	hostFlag   string
+	portFlag   int
+	tokenFlag  string
+	rxPortFlag int
 
 	stateMutex      sync.RWMutex
 	currentStatus   = StatusIdle

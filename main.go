@@ -19,6 +19,7 @@ func main() {
 	flag.StringVar(&hostFlag, "host", "0.0.0.0", "Web server listening host IP")
 	flag.IntVar(&portFlag, "port", 8080, "Web server listening port")
 	flag.StringVar(&tokenFlag, "token", "", "Access authentication token (empty to disable)")
+	flag.IntVar(&rxPortFlag, "rxport", 9999, "UDP port for real-time NMEA listening")
 
 	flag.Usage = func() {
 		fmt.Printf("==================================================\n")
@@ -30,6 +31,8 @@ func main() {
 		fmt.Printf("    	Web server listening host IP (default \"0.0.0.0\")\n")
 		fmt.Printf("  -port int\n")
 		fmt.Printf("    	Web server listening port (default 8080)\n")
+		fmt.Printf("  -rxport int\n")
+		fmt.Printf("    	UDP port for real-time NMEA listening (default 9999)\n")
 		fmt.Printf("  -token string\n")
 		fmt.Printf("    	Access authentication token (empty to disable)\n")
 		fmt.Printf("  -h, --help\n")
@@ -39,6 +42,8 @@ func main() {
 		fmt.Printf("    ./gps-simulator -host 0.0.0.0 -port 9000\n\n")
 		fmt.Printf("  Enable secure token authentication:\n")
 		fmt.Printf("    ./gps-simulator -token Secure123!\n\n")
+		fmt.Printf("  Configure custom NMEA listening port:\n")
+		fmt.Printf("    ./gps-simulator -rxport 10000\n\n")
 	}
 
 	flag.Parse()

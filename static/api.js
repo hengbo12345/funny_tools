@@ -62,6 +62,8 @@ export function connectSSE() {
 
 	logEventSource.onerror = () => {
 		addConsoleLine("⚠️ 后端日志断开，正在尝试重连...", "warning");
+		logEventSource.close();
+		setTimeout(connectSSE, 5000);
 	};
 }
 

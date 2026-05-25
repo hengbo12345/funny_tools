@@ -95,7 +95,7 @@ func triggerEphemerisDownload() {
 		doy := targetTime.YearDay()
 		doyStr := fmt.Sprintf("%03d", doy)
 
-		url := fmt.Sprintf("https://geodesy.noaa.gov/corsdata/rinex/%d/%s/brdc%s0.%sn.gz", year, doyStr, doyStr, yyd)
+		url := fmt.Sprintf("https://noaa-cors-pds.s3.amazonaws.com/rinex/%d/%s/brdc%s0.%sn.gz", year, doyStr, doyStr, yyd)
 		filename := fmt.Sprintf("brdc%s0.%sn.gz", doyStr, yyd)
 		destFileName := fmt.Sprintf("brdc%s0.%sn", doyStr, yyd)
 		destPath := filepath.Join("data/ephemeris", destFileName)

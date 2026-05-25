@@ -1,8 +1,10 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -178,30 +180,101 @@ func handleUploadEphemeris(w http.ResponseWriter, r *http.Request) {
 
 	filename := handler.Filename
 	baseName := filepath.Base(filename)
-	
-	// Check extension
-	if !strings.HasSuffix(baseName, ".n") && !strings.HasSuffix(baseName, ".brdc") && !strings.HasSuffix(baseName, "n") && !strings.HasSuffix(baseName, ".nav") && !strings.HasSuffix(baseName, ".rnx") {
-		http.Error(w, "Invalid ephemeris file format. Must be an N-file (.n, .brdc, .nav, .rnx)", http.StatusBadRequest)
+	lowerName := strings.ToLower(baseName)
+
+	ext := filepath.Ext(lowerName)
+	isGz := ext == ".gz"
+	isZip := ext == ".zip"
+
+	var reader io.Reader = file
+
+	if isGz {
+		// Decompress gzip on the fly
+		gzReader, err := gzip.NewReader(file)
+		if err != nil {
+			http.Error(w, "Failed to open gzip stream: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer gzReader.Close()
+		reader = gzReader
+		baseName = strings.TrimSuffix(baseName, ext)
+		lowerName = strings.ToLower(baseName)
+	} else if isZip {
+		// Read zip into memory buffer to allow ReaderAt random access
+		var buf bytes.Buffer
+		if _, err := io.Copy(&buf, file); err != nil {
+			http.Error(w, "Error reading uploaded zip file", http.StatusInternalServerError)
+			return
+		}
+		readerAt := bytes.NewReader(buf.Bytes())
+		zipReader, err := zip.NewReader(readerAt, int64(buf.Len()))
+		if err != nil {
+			http.Error(w, "Invalid zip archive", http.StatusBadRequest)
+			return
+		}
+
+		var targetZipFile *zip.File
+		for _, f := range zipReader.File {
+			if f.FileInfo().IsDir() {
+				continue
+			}
+			fName := strings.ToLower(f.Name)
+			if strings.HasSuffix(fName, ".n") || strings.HasSuffix(fName, ".brdc") ||
+				strings.HasSuffix(fName, ".nav") || strings.HasSuffix(fName, ".rnx") ||
+				strings.HasSuffix(fName, "n") || strings.Contains(fName, "brdc") {
+				targetZipFile = f
+				break
+			}
+		}
+
+		if targetZipFile == nil {
+			http.Error(w, "No valid ephemeris file (.n, .brdc, .nav, .rnx) found inside the zip archive", http.StatusBadRequest)
+			return
+		}
+
+		zipFileReadCloser, err := targetZipFile.Open()
+		if err != nil {
+			http.Error(w, "Error opening file inside zip: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer zipFileReadCloser.Close()
+		reader = zipFileReadCloser
+		baseName = filepath.Base(targetZipFile.Name)
+		lowerName = strings.ToLower(baseName)
+	}
+
+	// Relaxed extension checks for final uncompressed name
+	matched := false
+	if strings.HasSuffix(lowerName, ".n") || strings.HasSuffix(lowerName, ".brdc") ||
+		strings.HasSuffix(lowerName, ".nav") || strings.HasSuffix(lowerName, ".rnx") ||
+		strings.Contains(lowerName, "brdc") || strings.HasSuffix(lowerName, "n") {
+		matched = true
+	}
+
+	if !matched {
+		http.Error(w, "Invalid ephemeris file format. Must be an N-file (.n, .brdc, .nav, .rnx, .[yy]n) or compressed (.gz, .zip)", http.StatusBadRequest)
 		return
 	}
 
 	targetPath := filepath.Join("data/ephemeris", baseName)
 	dst, err := os.Create(targetPath)
 	if err != nil {
-		http.Error(w, "Unable to create local file", http.StatusInternalServerError)
+		http.Error(w, "Unable to create local file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer dst.Close()
 
-	if _, err := io.Copy(dst, file); err != nil {
-		http.Error(w, "Error saving file", http.StatusInternalServerError)
+	if _, err := io.Copy(dst, reader); err != nil {
+		// Clean up partial file
+		os.Remove(targetPath)
+		http.Error(w, "Error saving file: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	logBroker.Broadcast(fmt.Sprintf("星历文件上传成功: %s", baseName))
-	
+	logBroker.Broadcast(fmt.Sprintf("星历文件上传成功并就绪: %s", baseName))
+
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(fmt.Sprintf(`{"message": "File uploaded successfully as %s"}`, baseName)))
+	w.Write([]byte(fmt.Sprintf(`{"message": "File uploaded and prepared successfully as %s"}`, baseName)))
 }
 
 func handleSystemSetup(w http.ResponseWriter, r *http.Request) {
@@ -406,20 +479,33 @@ func triggerSystemSetup() {
 		return
 	}
 	
-	// Check standard dependencies: gcc, git, make, libfftw3
-	logBroker.Broadcast("正在检查并安装基础包依赖 (apt-get)...")
-	aptCmd := exec.Command("sudo", "apt-get", "update")
-	aptCmd.Stdout = os.Stdout
-	aptCmd.Stderr = os.Stderr
-	_ = aptCmd.Run()
+	// Check passwordless sudo access
+	sudoCheck := exec.Command("sudo", "-n", "true")
+	hasSudo := sudoCheck.Run() == nil
 
-	installCmd := exec.Command("sudo", "apt-get", "install", "-y", "git", "build-essential", "libfftw3-dev", "hackrf")
-	var installErr bytes.Buffer
-	installCmd.Stderr = &installErr
-	if err := installCmd.Run(); err != nil {
-		logBroker.Broadcast(fmt.Sprintf("安装包可能需要手动运行: %s", installErr.String()))
+	if !hasSudo {
+		logBroker.Broadcast("👉 检测到当前运行环境无免密 sudo 权限。")
+		logBroker.Broadcast("👉 请手动在服务器终端执行以下命令安装 HackRF 射频包依赖：")
+		logBroker.Broadcast("----------------------------------------------------------")
+		logBroker.Broadcast("   sudo apt-get update && sudo apt-get install -y git build-essential libfftw3-dev hackrf")
+		logBroker.Broadcast("----------------------------------------------------------")
+		logBroker.Broadcast("提示：系统依赖库（如 hackrf_transfer）可能需要手动安装。正在继续进行本地仿真器的下载与编译...")
 	} else {
-		logBroker.Broadcast("✅ 系统包依赖已安装。")
+		// Check standard dependencies: gcc, git, make, libfftw3
+		logBroker.Broadcast("正在检查并安装基础包依赖 (apt-get)...")
+		aptCmd := exec.Command("sudo", "apt-get", "update")
+		aptCmd.Stdout = os.Stdout
+		aptCmd.Stderr = os.Stderr
+		_ = aptCmd.Run()
+
+		installCmd := exec.Command("sudo", "apt-get", "install", "-y", "git", "build-essential", "libfftw3-dev", "hackrf")
+		var installErr bytes.Buffer
+		installCmd.Stderr = &installErr
+		if err := installCmd.Run(); err != nil {
+			logBroker.Broadcast(fmt.Sprintf("安装包可能需要手动运行: %s", installErr.String()))
+		} else {
+			logBroker.Broadcast("✅ 系统包依赖已安装。")
+		}
 	}
 
 	// 1. Clone and compile gps-sdr-sim locally if it does not exist
@@ -446,15 +532,10 @@ func triggerSystemSetup() {
 				srcBin := filepath.Join(buildDir, "gps-sdr-sim")
 				destBin := "./gps-sdr-sim"
 				
-				input, err := os.Open(srcBin)
-				if err == nil {
-					output, err := os.OpenFile(destBin, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
-					if err == nil {
-						_, _ = io.Copy(output, input)
-						output.Close()
-						logBroker.Broadcast("✅ gps-sdr-sim 编译并部署成功！")
-					}
-					input.Close()
+				if err := copyBinary(srcBin, destBin); err == nil {
+					logBroker.Broadcast("✅ gps-sdr-sim 编译并部署成功！")
+				} else {
+					logBroker.Broadcast(fmt.Sprintf("❌ 部署 gps-sdr-sim 失败: %v", err))
 				}
 			}
 		}
@@ -485,17 +566,15 @@ func triggerSystemSetup() {
 				logBroker.Broadcast(fmt.Sprintf("❌ 编译北斗生成器失败: %s. 请检查您的 GCC 环境。", makeErr.String()))
 			} else {
 				srcBin := filepath.Join(buildDir, "beidou-sdr-sim")
-				destBin := "./beidou-sdr-sim"
 				
-				input, err := os.Open(srcBin)
-				if err == nil {
-					output, err := os.OpenFile(destBin, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
-					if err == nil {
-						_, _ = io.Copy(output, input)
-						output.Close()
-						logBroker.Broadcast("✅ beidou-sdr-sim 北斗信号生成器编译并部署成功！")
-					}
-					input.Close()
+				err1 := copyBinary(srcBin, "./beidou-sdr-sim")
+				err2 := copyBinary(srcBin, "./beidou-sdr-sim-b1c")
+				err3 := copyBinary(srcBin, "./beidou-sdr-sim-b2a")
+				
+				if err1 == nil && err2 == nil && err3 == nil {
+					logBroker.Broadcast("✅ beidou-sdr-sim 北斗多频段信号生成器编译并部署成功（包含 B1I, B1C, B2a 副本）！")
+				} else {
+					logBroker.Broadcast("❌ 部署 beidou-sdr-sim 副本失败")
 				}
 			}
 		}
@@ -505,4 +584,12 @@ func triggerSystemSetup() {
 	}
 	
 	logBroker.Broadcast("=================== 依赖配置环境完成 ===================")
+}
+
+func copyBinary(src, dest string) error {
+	input, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dest, input, 0755)
 }
