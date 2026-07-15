@@ -1,1 +1,6 @@
 .worktrees/
+/passportvault
+/passportvault.exe
+dist/
+passport-vault-go.dat
+*.key
