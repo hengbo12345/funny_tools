@@ -15,6 +15,8 @@ pwsh ./PassportVault.ps1 -VaultPath "D:\Backup\passport-vault.dat"
 pwsh ./PassportVault.ps1 -VaultPath ".\passport-vault.dat" -KeyFilePath ".\vault.key"
 ```
 
+When run without `-VaultPath`, the vault is stored beside the script as `passport-vault.dat`.
+
 The vault is encrypted on disk. The entry password and optional key file are required to unlock it. Losing them means the vault cannot be recovered.
 
 ## Security Notes
