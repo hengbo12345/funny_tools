@@ -91,6 +91,15 @@ Describe "PassportVault crypto" {
         $envelope.cipher.hmac | Should -Not -BeNullOrEmpty
     }
 
+    It "automatically falls back to AES-CBC-HMAC when AES-GCM is unavailable" {
+        $envelope = Protect-VaultPayload -PlainJson '{"schemaVersion":1,"entries":[]}' -Password "master" -Options @{ SimulateAesGcmUnavailable = $true }
+
+        $plain = Unprotect-VaultPayload -Envelope $envelope -Password "master"
+
+        $plain | Should -Be '{"schemaVersion":1,"entries":[]}'
+        $envelope.cipher.name | Should -Be "AES-CBC-HMAC"
+    }
+
     It "rejects tampered AES-CBC-HMAC protected metadata" {
         $envelope = Protect-VaultPayload -PlainJson '{"schemaVersion":1,"entries":[]}' -Password "master" -Options @{ ForceCipher = "AES-CBC-HMAC" }
         $envelope.kdf.iterations = 100000

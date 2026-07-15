@@ -105,3 +105,25 @@ implementation and was blocked by the same missing executable.
 ### Post-Commit Static Verification
 
 - `git diff --check`, `git diff --cached --check`, and `git show --check --stat --oneline HEAD` all completed with exit code 0.
+## Review Fix: Automatic AES-GCM Fallback
+
+### Findings Fixed
+
+- Default encryption now falls back to AES-CBC-HMAC when AES-GCM construction or encryption raises `PlatformNotSupportedException`.
+- `ForceCipher = "AES-CBC-HMAC"` remains a deterministic override.
+- Added `SimulateAesGcmUnavailable = $true` as a narrow internal test option that exercises automatic fallback without `ForceCipher`.
+
+### Commands And Results
+
+- `pwsh -NoProfile -Command "Invoke-Pester -Path tests/PassportVault.Crypto.Tests.ps1 -Output Detailed"` was attempted before and after the implementation; both attempts failed with exit code 127: `/bin/bash: line 1: pwsh: command not found`.
+- `git diff --check` completed successfully before commit.
+
+### Files Changed
+
+- `src/PassportVault.Crypto.psm1`
+- `tests/PassportVault.Crypto.Tests.ps1`
+- `.superpowers/sdd/task-2-report.md`
+
+### Remaining Concerns
+
+- PowerShell 7+ and Pester remain unavailable in this container, so runtime verification of the new fallback test could not be completed here.

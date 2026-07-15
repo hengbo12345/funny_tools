@@ -212,7 +212,11 @@ function Protect-VaultPayload {
         }
         $keyFilePath = if ($Options.ContainsKey("KeyFilePath")) { [string]$Options.KeyFilePath } else { $null }
         $usesKeyFile = -not [string]::IsNullOrWhiteSpace($keyFilePath)
-        $cipherName = if ($Options.ContainsKey("ForceCipher")) { [string]$Options.ForceCipher } else { "AES-GCM" }
+        $forceCipherSpecified = $Options.ContainsKey("ForceCipher")
+        $cipherName = if ($forceCipherSpecified) { [string]$Options.ForceCipher } else { "AES-GCM" }
+        if (-not $forceCipherSpecified -and $Options.ContainsKey("SimulateAesGcmUnavailable") -and [bool]$Options.SimulateAesGcmUnavailable) {
+            $cipherName = "AES-CBC-HMAC"
+        }
         if ($cipherName -notin @("AES-GCM", "AES-CBC-HMAC")) {
             throw $script:UnsupportedVaultVersion
         }
@@ -252,11 +256,38 @@ function Protect-VaultPayload {
         $cipherBytes = [byte[]]::new($plainBytes.Length)
         $tag = [byte[]]::new(16)
         $aad = Get-Bytes -Value (ConvertTo-ProtectedHeaderJson -Envelope $envelope)
-        $aes = [System.Security.Cryptography.AesGcm]::new($keys.encryptionKey)
+        $aes = $null
         try {
+            $aes = [System.Security.Cryptography.AesGcm]::new($keys.encryptionKey)
             $aes.Encrypt($initializationBytes, $plainBytes, $cipherBytes, $tag, $aad)
+        } catch [System.PlatformNotSupportedException] {
+            if ($forceCipherSpecified) {
+                throw
+            }
+            $initializationBytes = New-RandomBytes -Length 16
+            $envelope = New-VaultEnvelope -Iterations $iterations -Salt $salt -CipherName "AES-CBC-HMAC" -InitializationBytes $initializationBytes -UsesKeyFile $usesKeyFile
+            $cbc = $null
+            $encryptor = $null
+            try {
+                $cbc = [System.Security.Cryptography.Aes]::Create()
+                $cbc.Mode = [System.Security.Cryptography.CipherMode]::CBC
+                $cbc.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+                $cbc.Key = $keys.encryptionKey
+                $cbc.IV = $initializationBytes
+                $encryptor = $cbc.CreateEncryptor()
+                $cipherBytes = $encryptor.TransformFinalBlock($plainBytes, 0, $plainBytes.Length)
+            } finally {
+                if ($null -ne $encryptor) { $encryptor.Dispose() }
+                if ($null -ne $cbc) { $cbc.Dispose() }
+            }
+            $headerBytes = Get-Bytes -Value (ConvertTo-ProtectedHeaderJson -Envelope $envelope)
+            $macInput = Join-Bytes -Parts @($headerBytes, $initializationBytes, $cipherBytes)
+            $mac = New-HmacSha256 -Key $keys.macKey -Data $macInput
+            $envelope.cipher.hmac = ConvertTo-Base64 -Bytes $mac
+            $envelope.ciphertext = ConvertTo-Base64 -Bytes $cipherBytes
+            return $envelope
         } finally {
-            $aes.Dispose()
+            if ($null -ne $aes) { $aes.Dispose() }
         }
         $envelope.cipher.tag = ConvertTo-Base64 -Bytes $tag
         $envelope.ciphertext = ConvertTo-Base64 -Bytes $cipherBytes
