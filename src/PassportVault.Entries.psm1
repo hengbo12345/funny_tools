@@ -48,7 +48,7 @@ function Search-VaultEntries {
     )
 
     $needle = $Query.ToLowerInvariant()
-    return @($Vault.entries | Where-Object {
+    return ,@($Vault.entries | Where-Object {
         ($_.name -as [string]).ToLowerInvariant().Contains($needle) -or
         ($_.username -as [string]).ToLowerInvariant().Contains($needle) -or
         ($_.notes -as [string]).ToLowerInvariant().Contains($needle)

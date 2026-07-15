@@ -19,6 +19,24 @@ Describe "PassportVault entry operations" {
         (Search-VaultEntries -Vault $vault -Query "secret-pass").Count | Should -Be 0
     }
 
+    It "returns an object array for a single search result" {
+        $vault = New-VaultPayload
+        $vault = Add-VaultEntry -Vault $vault -Entry (New-VaultEntry -Name "only" -Username "user" -Password "pass" -Notes "")
+
+        $results = Search-VaultEntries -Vault $vault -Query "only"
+
+        $results.GetType().FullName | Should -Be "System.Object[]"
+        $results.Count | Should -Be 1
+        $results[0].name | Should -Be "only"
+    }
+
+    It "returns an empty object array when search has no matches" {
+        $results = Search-VaultEntries -Vault (New-VaultPayload) -Query "missing"
+
+        $results.GetType().FullName | Should -Be "System.Object[]"
+        $results.Count | Should -Be 0
+    }
+
     It "updates an entry and changes updatedAt" {
         $vault = New-VaultPayload
         $entry = New-VaultEntry -Name "old" -Username "user" -Password "pw" -Notes ""

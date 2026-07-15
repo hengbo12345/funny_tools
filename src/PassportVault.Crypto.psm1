@@ -9,14 +9,14 @@ $script:UnsupportedVaultVersion = "Unsupported vault version"
 
 function New-RandomBytes {
     param([Parameter(Mandatory)][int]$Length)
-    $bytes = [byte[]]::new($Length)
+    [byte[]]$bytes = [byte[]]::new($Length)
     [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    return $bytes
+    return ,$bytes
 }
 
 function Get-Bytes {
     param([Parameter(Mandatory)][string]$Value)
-    return [System.Text.Encoding]::UTF8.GetBytes($Value)
+    return ,([System.Text.Encoding]::UTF8.GetBytes($Value))
 }
 
 function ConvertTo-Base64 {
@@ -26,7 +26,7 @@ function ConvertTo-Base64 {
 
 function ConvertFrom-Base64 {
     param([Parameter(Mandatory)][string]$Value)
-    return [Convert]::FromBase64String($Value)
+    return ,([Convert]::FromBase64String($Value))
 }
 
 function Clear-Bytes {
@@ -39,15 +39,15 @@ function Clear-Bytes {
 function Get-KeyFileBytes {
     param([string]$KeyFilePath)
     if ([string]::IsNullOrWhiteSpace($KeyFilePath)) {
-        return [byte[]]::new(0)
+        return ,([byte[]]::new(0))
     }
     try {
         $resolvedPath = Resolve-Path -LiteralPath $KeyFilePath -ErrorAction Stop
-        $bytes = [System.IO.File]::ReadAllBytes($resolvedPath.Path)
+        [byte[]]$bytes = [System.IO.File]::ReadAllBytes($resolvedPath.Path)
         if ($bytes.Length -eq 0) {
             throw $script:CouldNotUnlockVault
         }
-        return $bytes
+        return ,$bytes
     } catch {
         throw $script:CouldNotUnlockVault
     }
@@ -70,13 +70,48 @@ function Get-RequiredBase64Bytes {
     if ($Value -isnot [string]) {
         throw $script:CouldNotUnlockVault
     }
-    return ConvertFrom-Base64 -Value $Value
+    [byte[]]$bytes = ConvertFrom-Base64 -Value $Value
+    return ,$bytes
 }
 
 function Assert-ByteLength {
     param([Parameter(Mandatory)][byte[]]$Bytes, [Parameter(Mandatory)][int]$ExpectedLength)
     if ($Bytes.Length -ne $ExpectedLength) {
         throw $script:CouldNotUnlockVault
+    }
+}
+
+function Get-Sha256Digest {
+    param([Parameter(Mandatory)][byte[]]$Bytes)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return ,($sha256.ComputeHash($Bytes))
+    } finally {
+        $sha256.Dispose()
+    }
+}
+
+function ConvertTo-BigEndianUInt32Bytes {
+    param([Parameter(Mandatory)][uint32]$Value)
+    [byte[]]$bytes = [BitConverter]::GetBytes($Value)
+    if ([BitConverter]::IsLittleEndian) {
+        [Array]::Reverse($bytes)
+    }
+    return ,$bytes
+}
+
+function New-FactorFrame {
+    param(
+        [Parameter(Mandatory)][byte[]]$PasswordBytes,
+        [Parameter(Mandatory)][byte[]]$KeyFileBytes
+    )
+    [byte[]]$marker = Get-Bytes -Value "PassportVault-KDF-v1"
+    [byte[]]$passwordLength = ConvertTo-BigEndianUInt32Bytes -Value $PasswordBytes.Length
+    [byte[]]$keyFileDigest = Get-Sha256Digest -Bytes $KeyFileBytes
+    try {
+        return ,(Join-Bytes -Parts ([byte[][]]@($marker, $passwordLength, $PasswordBytes, $keyFileDigest)))
+    } finally {
+        Clear-Bytes -Bytes $keyFileDigest
     }
 }
 
@@ -87,19 +122,15 @@ function New-KeyMaterial {
         [Parameter(Mandatory)][int]$Iterations,
         [string]$KeyFilePath
     )
-    $passwordBytes = $null
-    $keyFileBytes = $null
-    $combined = $null
+    [byte[]]$passwordBytes = $null
+    [byte[]]$keyFileBytes = $null
+    [byte[]]$combined = $null
     $kdf = $null
     try {
         $validatedIterations = Get-ValidatedPbkdf2Iterations -Value $Iterations
         $passwordBytes = Get-Bytes -Value $Password
         $keyFileBytes = Get-KeyFileBytes -KeyFilePath $KeyFilePath
-        $combined = [byte[]]::new($passwordBytes.Length + $keyFileBytes.Length)
-        [Buffer]::BlockCopy($passwordBytes, 0, $combined, 0, $passwordBytes.Length)
-        if ($keyFileBytes.Length -gt 0) {
-            [Buffer]::BlockCopy($keyFileBytes, 0, $combined, $passwordBytes.Length, $keyFileBytes.Length)
-        }
+        $combined = New-FactorFrame -PasswordBytes $passwordBytes -KeyFileBytes $keyFileBytes
         $kdf = [System.Security.Cryptography.Rfc2898DeriveBytes]::new(
             $combined, $Salt, $validatedIterations, [System.Security.Cryptography.HashAlgorithmName]::SHA256
         )
@@ -131,7 +162,7 @@ function New-HmacSha256 {
     param([Parameter(Mandatory)][byte[]]$Key, [Parameter(Mandatory)][byte[]]$Data)
     $hmac = [System.Security.Cryptography.HMACSHA256]::new($Key)
     try {
-        return $hmac.ComputeHash($Data)
+        return ,($hmac.ComputeHash($Data))
     } finally {
         $hmac.Dispose()
     }
@@ -146,7 +177,7 @@ function Join-Bytes {
         [Buffer]::BlockCopy($part, 0, $result, $offset, $part.Length)
         $offset += $part.Length
     }
-    return $result
+    return ,$result
 }
 
 function ConvertTo-ProtectedHeaderJson {
@@ -196,6 +227,11 @@ function New-VaultEnvelope {
     }
 }
 
+function New-AesGcm {
+    param([Parameter(Mandatory)][byte[]]$Key)
+    return [System.Security.Cryptography.AesGcm]::new($Key)
+}
+
 function Protect-VaultPayload {
     param(
         [Parameter(Mandatory)][string]$PlainJson,
@@ -203,7 +239,7 @@ function Protect-VaultPayload {
         [hashtable]$Options = @{}
     )
     $keys = $null
-    $plainBytes = $null
+    [byte[]]$plainBytes = $null
     try {
         $iterations = if ($Options.ContainsKey("Iterations")) {
             Get-ValidatedPbkdf2Iterations -Value $Options.Iterations
@@ -214,14 +250,11 @@ function Protect-VaultPayload {
         $usesKeyFile = -not [string]::IsNullOrWhiteSpace($keyFilePath)
         $forceCipherSpecified = $Options.ContainsKey("ForceCipher")
         $cipherName = if ($forceCipherSpecified) { [string]$Options.ForceCipher } else { "AES-GCM" }
-        if (-not $forceCipherSpecified -and $Options.ContainsKey("SimulateAesGcmUnavailable") -and [bool]$Options.SimulateAesGcmUnavailable) {
-            $cipherName = "AES-CBC-HMAC"
-        }
         if ($cipherName -notin @("AES-GCM", "AES-CBC-HMAC")) {
             throw $script:UnsupportedVaultVersion
         }
-        $salt = New-RandomBytes -Length 32
-        $initializationBytes = if ($cipherName -eq "AES-CBC-HMAC") {
+        [byte[]]$salt = New-RandomBytes -Length 32
+        [byte[]]$initializationBytes = if ($cipherName -eq "AES-CBC-HMAC") {
             New-RandomBytes -Length 16
         } else {
             New-RandomBytes -Length 12
@@ -240,25 +273,25 @@ function Protect-VaultPayload {
                 $aes.Key = $keys.encryptionKey
                 $aes.IV = $initializationBytes
                 $encryptor = $aes.CreateEncryptor()
-                $cipherBytes = $encryptor.TransformFinalBlock($plainBytes, 0, $plainBytes.Length)
+                [byte[]]$cipherBytes = $encryptor.TransformFinalBlock($plainBytes, 0, $plainBytes.Length)
             } finally {
                 if ($null -ne $encryptor) { $encryptor.Dispose() }
                 if ($null -ne $aes) { $aes.Dispose() }
             }
-            $headerBytes = Get-Bytes -Value (ConvertTo-ProtectedHeaderJson -Envelope $envelope)
-            $macInput = Join-Bytes -Parts @($headerBytes, $initializationBytes, $cipherBytes)
-            $mac = New-HmacSha256 -Key $keys.macKey -Data $macInput
+            [byte[]]$headerBytes = Get-Bytes -Value (ConvertTo-ProtectedHeaderJson -Envelope $envelope)
+            [byte[]]$macInput = Join-Bytes -Parts @($headerBytes, $initializationBytes, $cipherBytes)
+            [byte[]]$mac = New-HmacSha256 -Key $keys.macKey -Data $macInput
             $envelope.cipher.hmac = ConvertTo-Base64 -Bytes $mac
             $envelope.ciphertext = ConvertTo-Base64 -Bytes $cipherBytes
             return $envelope
         }
 
-        $cipherBytes = [byte[]]::new($plainBytes.Length)
-        $tag = [byte[]]::new(16)
-        $aad = Get-Bytes -Value (ConvertTo-ProtectedHeaderJson -Envelope $envelope)
+        [byte[]]$cipherBytes = [byte[]]::new($plainBytes.Length)
+        [byte[]]$tag = [byte[]]::new(16)
+        [byte[]]$aad = Get-Bytes -Value (ConvertTo-ProtectedHeaderJson -Envelope $envelope)
         $aes = $null
         try {
-            $aes = [System.Security.Cryptography.AesGcm]::new($keys.encryptionKey)
+            $aes = New-AesGcm -Key $keys.encryptionKey
             $aes.Encrypt($initializationBytes, $plainBytes, $cipherBytes, $tag, $aad)
         } catch [System.PlatformNotSupportedException] {
             if ($forceCipherSpecified) {
@@ -305,7 +338,7 @@ function Unprotect-VaultPayload {
         [string]$KeyFilePath
     )
     $keys = $null
-    $plainBytes = $null
+    [byte[]]$plainBytes = $null
     try {
         if ($Envelope.format -isnot [string]) {
             throw $script:CouldNotUnlockVault
@@ -345,23 +378,23 @@ function Unprotect-VaultPayload {
         }
 
         $iterations = Get-ValidatedPbkdf2Iterations -Value $Envelope.kdf.iterations
-        $salt = Get-RequiredBase64Bytes -Value $Envelope.kdf.salt
+        [byte[]]$salt = Get-RequiredBase64Bytes -Value $Envelope.kdf.salt
         Assert-ByteLength -Bytes $salt -ExpectedLength 32
         $keyPathForDerivation = if ($requiresKeyFile) { $KeyFilePath } else { $null }
         $keys = New-KeyMaterial -Password $Password -Salt $salt -Iterations $iterations -KeyFilePath $keyPathForDerivation
-        $cipherBytes = Get-RequiredBase64Bytes -Value $Envelope.ciphertext
-        $aad = Get-Bytes -Value (ConvertTo-ProtectedHeaderJson -Envelope $Envelope)
+        [byte[]]$cipherBytes = Get-RequiredBase64Bytes -Value $Envelope.ciphertext
+        [byte[]]$aad = Get-Bytes -Value (ConvertTo-ProtectedHeaderJson -Envelope $Envelope)
 
         if ($Envelope.cipher.name -eq "AES-CBC-HMAC") {
-            $iv = Get-RequiredBase64Bytes -Value $Envelope.cipher.iv
-            $expectedMac = Get-RequiredBase64Bytes -Value $Envelope.cipher.hmac
+            [byte[]]$iv = Get-RequiredBase64Bytes -Value $Envelope.cipher.iv
+            [byte[]]$expectedMac = Get-RequiredBase64Bytes -Value $Envelope.cipher.hmac
             Assert-ByteLength -Bytes $iv -ExpectedLength 16
             Assert-ByteLength -Bytes $expectedMac -ExpectedLength 32
             if ($cipherBytes.Length -eq 0 -or $cipherBytes.Length % 16 -ne 0) {
                 throw $script:CouldNotUnlockVault
             }
-            $macInput = Join-Bytes -Parts @($aad, $iv, $cipherBytes)
-            $actualMac = New-HmacSha256 -Key $keys.macKey -Data $macInput
+            [byte[]]$macInput = Join-Bytes -Parts @($aad, $iv, $cipherBytes)
+            [byte[]]$actualMac = New-HmacSha256 -Key $keys.macKey -Data $macInput
             if (-not (Test-FixedTimeEquals -Left $expectedMac -Right $actualMac)) {
                 throw $script:CouldNotUnlockVault
             }
@@ -382,8 +415,8 @@ function Unprotect-VaultPayload {
             }
         }
 
-        $nonce = Get-RequiredBase64Bytes -Value $Envelope.cipher.nonce
-        $tag = Get-RequiredBase64Bytes -Value $Envelope.cipher.tag
+        [byte[]]$nonce = Get-RequiredBase64Bytes -Value $Envelope.cipher.nonce
+        [byte[]]$tag = Get-RequiredBase64Bytes -Value $Envelope.cipher.tag
         Assert-ByteLength -Bytes $nonce -ExpectedLength 12
         Assert-ByteLength -Bytes $tag -ExpectedLength 16
         $plainBytes = [byte[]]::new($cipherBytes.Length)

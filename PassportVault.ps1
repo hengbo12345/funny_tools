@@ -59,15 +59,73 @@ function Select-Entry {
     return $null
 }
 
+function Start-ClipboardClearTimer {
+    param(
+        [Parameter(Mandatory)][string]$ExpectedValue,
+        [int]$DelaySeconds = 30
+    )
+    if ($null -eq (Get-Command Get-Clipboard -ErrorAction SilentlyContinue) -or
+        $null -eq (Get-Command Set-Clipboard -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+
+    $timer = $null
+    $sourceIdentifier = "PassportVault.Clipboard.$([Guid]::NewGuid().ToString('N'))"
+    try {
+        $timer = [System.Timers.Timer]::new($DelaySeconds * 1000)
+        $timer.AutoReset = $false
+        Register-ObjectEvent -InputObject $timer -EventName Elapsed -SourceIdentifier $sourceIdentifier -MessageData @{
+            expectedValue = $ExpectedValue
+            sourceIdentifier = $sourceIdentifier
+            timer = $timer
+        } -Action {
+            try {
+                $currentValue = Get-Clipboard -Raw -ErrorAction Stop
+                if ($currentValue -ceq $event.MessageData.expectedValue) {
+                    Set-Clipboard -Value ([string]::Empty) -ErrorAction Stop
+                }
+            } catch {
+            } finally {
+                $event.MessageData.timer.Dispose()
+                Unregister-Event -SourceIdentifier $event.MessageData.sourceIdentifier -ErrorAction SilentlyContinue
+            }
+        } | Out-Null
+        $timer.Start()
+        return $true
+    } catch {
+        if ($null -ne $timer) { $timer.Dispose() }
+        Unregister-Event -SourceIdentifier $sourceIdentifier -ErrorAction SilentlyContinue
+        return $false
+    }
+}
+
+function Copy-EntryPassword {
+    param([Parameter(Mandatory)][string]$Password)
+    if ($null -eq (Get-Command Set-Clipboard -ErrorAction SilentlyContinue)) {
+        Write-Host "Clipboard is unavailable."
+        return
+    }
+    try {
+        Set-Clipboard -Value $Password -ErrorAction Stop
+        Write-Host "Password copied to clipboard."
+        if (Start-ClipboardClearTimer -ExpectedValue $Password -DelaySeconds 30) {
+            Write-Host "Clipboard will clear in 30 seconds if it is unchanged."
+        }
+    } catch {
+        Write-Host "Clipboard is unavailable."
+    }
+}
+
 function Show-EntryDetails {
     param([Parameter(Mandatory)][hashtable]$Entry)
     Write-Host "Name: $($Entry.name)"
     Write-Host "Username: $($Entry.username)"
     Write-Host "Password: ********"
     Write-Host "Notes: $($Entry.notes)"
-    $action = Read-Host "Reveal password? (y/N)"
-    if ($action -eq "y") {
-        Write-Host "Password: $($Entry.password)"
+    $action = ([string](Read-Host "[R]eveal, [C]opy, or Enter to return")).Trim().ToLowerInvariant()
+    switch ($action) {
+        "r" { Write-Host "Password: $($Entry.password)" }
+        "c" { Copy-EntryPassword -Password $Entry.password }
     }
 }
 
@@ -83,7 +141,7 @@ function Add-EntryInteractive {
 function Search-EntriesInteractive {
     param([Parameter(Mandatory)][hashtable]$Vault)
     $query = Read-Host "Search"
-    $results = @(Search-VaultEntries -Vault $Vault -Query $query)
+    [object[]]$results = Search-VaultEntries -Vault $Vault -Query $query
     if ($results.Count -eq 0) {
         Write-Host "No matches."
         return
@@ -91,6 +149,15 @@ function Search-EntriesInteractive {
     for ($i = 0; $i -lt $results.Count; $i++) {
         Write-Host ("{0}. {1} ({2})" -f ($i + 1), $results[$i].name, $results[$i].username)
     }
+
+    $choice = Read-Host "Open result number (Enter to return)"
+    if ([string]::IsNullOrWhiteSpace($choice)) { return }
+    $index = 0
+    if ([int]::TryParse($choice, [ref]$index) -and $index -ge 1 -and $index -le $results.Count) {
+        Show-EntryDetails -Entry $results[$index - 1]
+        return
+    }
+    Write-Host "Invalid choice."
 }
 
 function Edit-EntryInteractive {
@@ -146,11 +213,18 @@ function Show-MainMenu {
                 }
             }
             "7" {
-                $newPassword = Read-EntryPassword -Prompt "New entry password"
-                $confirm = Read-EntryPassword -Prompt "Confirm new entry password"
-                if ($newPassword -ne $confirm) { Write-Host "Passwords do not match."; break }
-                Save-Vault -Vault $Vault -VaultPath $VaultPath -Password $newPassword -KeyFilePath $KeyFilePath
-                $Password = $newPassword
+                $newPassword = $null
+                $confirmPassword = $null
+                try {
+                    $newPassword = Read-EntryPassword -Prompt "New entry password"
+                    $confirmPassword = Read-EntryPassword -Prompt "Confirm new entry password"
+                    if ($newPassword -ne $confirmPassword) { Write-Host "Passwords do not match."; break }
+                    Save-Vault -Vault $Vault -VaultPath $VaultPath -Password $newPassword -KeyFilePath $KeyFilePath
+                    $Password = $newPassword
+                } finally {
+                    $newPassword = $null
+                    $confirmPassword = $null
+                }
             }
             "8" { return }
             default { Write-Host "Invalid choice." }
@@ -158,6 +232,10 @@ function Show-MainMenu {
     }
 }
 
+$password = $null
+$confirm = $null
+$vault = $null
+$exitCode = 0
 try {
     $password = Read-EntryPassword
     if (Test-VaultExists -VaultPath $VaultPath) {
@@ -171,5 +249,11 @@ try {
     Show-MainMenu -Vault $vault -Password $password
 } catch {
     Write-Host (Get-UserFacingErrorMessage -Message $_.Exception.Message)
-    exit 1
+    $exitCode = 1
+} finally {
+    # PowerShell strings are immutable, but dropping references limits their lifetime.
+    $password = $null
+    $confirm = $null
+    $vault = $null
 }
+if ($exitCode -ne 0) { exit $exitCode }

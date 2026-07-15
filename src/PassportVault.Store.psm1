@@ -31,6 +31,21 @@ function ConvertTo-Hashtable {
     return $InputObject
 }
 
+function Remove-VaultBackupIfReplaced {
+    param(
+        [string]$BackupPath,
+        [Parameter(Mandatory)][bool]$ReplacementSucceeded
+    )
+    if (-not $ReplacementSucceeded -or [string]::IsNullOrWhiteSpace($BackupPath)) {
+        return
+    }
+    try {
+        if ([System.IO.File]::Exists($BackupPath)) {
+            [System.IO.File]::Delete($BackupPath)
+        }
+    } catch {}
+}
+
 function Save-Vault {
     param(
         [Parameter(Mandatory)][hashtable]$Vault,
@@ -41,6 +56,7 @@ function Save-Vault {
 
     $tempPath = $null
     $backupPath = $null
+    $replacementSucceeded = $false
     try {
         $plainJson = $Vault | ConvertTo-Json -Depth 20 -Compress
         $envelope = Protect-VaultPayload -PlainJson $plainJson -Password $Password -Options @{ KeyFilePath = $KeyFilePath }
@@ -57,6 +73,7 @@ function Save-Vault {
         [System.IO.File]::WriteAllText($tempPath, $envelopeJson, [System.Text.Encoding]::UTF8)
         if ([System.IO.File]::Exists($resolvedVaultPath)) {
             [System.IO.File]::Replace($tempPath, $resolvedVaultPath, $backupPath, $true)
+            $replacementSucceeded = $true
         } else {
             [System.IO.File]::Move($tempPath, $resolvedVaultPath)
         }
@@ -66,11 +83,6 @@ function Save-Vault {
                 if ([System.IO.File]::Exists($tempPath)) { [System.IO.File]::Delete($tempPath) }
             } catch {}
         }
-        if ($null -ne $backupPath) {
-            try {
-                if ([System.IO.File]::Exists($backupPath)) { [System.IO.File]::Delete($backupPath) }
-            } catch {}
-        }
         throw "Could not save vault"
     } finally {
         if ($null -ne $tempPath) {
@@ -78,11 +90,7 @@ function Save-Vault {
                 if ([System.IO.File]::Exists($tempPath)) { [System.IO.File]::Delete($tempPath) }
             } catch {}
         }
-        if ($null -ne $backupPath) {
-            try {
-                if ([System.IO.File]::Exists($backupPath)) { [System.IO.File]::Delete($backupPath) }
-            } catch {}
-        }
+        Remove-VaultBackupIfReplaced -BackupPath $backupPath -ReplacementSucceeded $replacementSucceeded
     }
 }
 

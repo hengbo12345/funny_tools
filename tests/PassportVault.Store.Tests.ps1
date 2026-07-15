@@ -47,6 +47,20 @@ Describe "PassportVault store" {
         { Save-Vault -Vault (New-VaultPayload) -VaultPath $script:path -Password "master" } | Should -Throw "Could not save vault"
     }
 
+    It "preserves a replacement backup until replacement succeeds" {
+        $backupPath = Join-Path $TestDrive "replacement.bak"
+        InModuleScope PassportVault.Store -Parameters @{ BackupPath = $backupPath } {
+            param($BackupPath)
+            [System.IO.File]::WriteAllText($BackupPath, "original")
+
+            Remove-VaultBackupIfReplaced -BackupPath $BackupPath -ReplacementSucceeded $false
+            [System.IO.File]::Exists($BackupPath) | Should -BeTrue
+
+            Remove-VaultBackupIfReplaced -BackupPath $BackupPath -ReplacementSucceeded $true
+            [System.IO.File]::Exists($BackupPath) | Should -BeFalse
+        }
+    }
+
     It "rejects unsupported vault schema after decrypting" {
         $vault = New-VaultPayload
         $vault.schemaVersion = 99

@@ -23,5 +23,5 @@ The vault is encrypted on disk. The entry password and optional key file are req
 
 - The file is not KeePass `.kdbx` compatible.
 - Default KDF is PBKDF2-HMAC-SHA256 with 600000 iterations.
-- Default cipher is AES-GCM on PowerShell 7+.
+- AES-GCM is preferred when the host supports it; AES-CBC with HMAC-SHA256 is the authenticated fallback when AES-GCM is unavailable.
 - Passwords are hidden by default in the menu.
