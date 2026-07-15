@@ -17,12 +17,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\PassportVault.ps1 -Vau
 
 When run without `-VaultPath`, the vault is stored beside the script as `passport-vault.dat`.
 
+To debug a generic `Operation failed.` message, rerun with `-ShowErrorDetails`:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\PassportVault.ps1 -ShowErrorDetails
+```
+
 The vault is encrypted on disk. The entry password and optional key file are required to unlock it. Losing them means the vault cannot be recovered.
 
 When using `-KeyFilePath`, the key file must already exist, be non-empty, and remain unchanged for the lifetime of the vault. Back it up separately from the vault file.
 
 ```powershell
-$key = [byte[]]::new(32)
+$key = New-Object 'byte[]' 32
 $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 try {
     $rng.GetBytes($key)

@@ -1,13 +1,20 @@
 param(
     [string]$VaultPath = (Join-Path $PSScriptRoot "passport-vault.dat"),
-    [string]$KeyFilePath
+    [string]$KeyFilePath,
+    [switch]$ShowErrorDetails
 )
 
 Set-StrictMode -Version Latest
 
-Import-Module "$PSScriptRoot/src/PassportVault.Entries.psm1" -Force
-Import-Module "$PSScriptRoot/src/PassportVault.Crypto.psm1" -Force
-Import-Module "$PSScriptRoot/src/PassportVault.Store.psm1" -Force
+Import-Module "$PSScriptRoot/src/PassportVault.Entries.psm1" -Force -ErrorAction Stop
+Import-Module "$PSScriptRoot/src/PassportVault.Crypto.psm1" -Force -ErrorAction Stop
+Import-Module "$PSScriptRoot/src/PassportVault.Store.psm1" -Force -ErrorAction Stop
+
+foreach ($requiredCommand in @("New-VaultPayload", "New-VaultEntry", "Add-VaultEntry", "Search-VaultEntries", "Update-VaultEntry", "Remove-VaultEntry", "Save-Vault", "Load-Vault", "Test-VaultExists")) {
+    if ($null -eq (Get-Command $requiredCommand -ErrorAction SilentlyContinue)) {
+        throw "Required command not loaded: $requiredCommand"
+    }
+}
 
 $script:ClipboardEventJobs = @()
 function Read-EntryPassword {
@@ -112,7 +119,7 @@ function Start-ClipboardClearTimer {
     $eventJob = $null
     $sourceIdentifier = "PassportVault.Clipboard.$([Guid]::NewGuid().ToString('N'))"
     try {
-        $timer = [System.Timers.Timer]::new($DelaySeconds * 1000)
+        $timer = New-Object System.Timers.Timer ($DelaySeconds * 1000)
         $timer.AutoReset = $false
         $expectedDigest = Get-ClipboardValueDigest -Value $ExpectedValue
         $eventJob = Register-ObjectEvent -InputObject $timer -EventName Elapsed -SourceIdentifier $sourceIdentifier -MessageData @{
@@ -308,6 +315,16 @@ try {
     Show-MainMenu -Vault $vault -Password $password
 } catch {
     Write-Host (Get-UserFacingErrorMessage -Message $_.Exception.Message)
+    if ($ShowErrorDetails) {
+        Write-Host ""
+        Write-Host "Error details:"
+        Write-Host $_.Exception.ToString()
+        if ($_.ScriptStackTrace) {
+            Write-Host ""
+            Write-Host "Script stack:"
+            Write-Host $_.ScriptStackTrace
+        }
+    }
     $exitCode = 1
 } finally {
     # PowerShell strings are immutable, but dropping references limits their lifetime.

@@ -9,7 +9,7 @@ $script:UnsupportedVaultVersion = "Unsupported vault version"
 
 function New-RandomBytes {
     param([Parameter(Mandatory)][int]$Length)
-    [byte[]]$bytes = [byte[]]::new($Length)
+    [byte[]]$bytes = (New-Object 'byte[]' $Length)
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     try {
         $rng.GetBytes($bytes)
@@ -44,7 +44,7 @@ function Clear-Bytes {
 function Get-KeyFileBytes {
     param([string]$KeyFilePath)
     if ([string]::IsNullOrWhiteSpace($KeyFilePath)) {
-        return ,([byte[]]::new(0))
+        return ,(New-Object 'byte[]' 0)
     }
     try {
         $resolvedPath = Resolve-Path -LiteralPath $KeyFilePath -ErrorAction Stop
@@ -137,8 +137,8 @@ function New-KeyMaterial {
         $keyFileBytes = Get-KeyFileBytes -KeyFilePath $KeyFilePath
         $combined = New-FactorFrame -PasswordBytes $passwordBytes -KeyFileBytes $keyFileBytes
         [byte[]]$derivedBytes = New-Pbkdf2HmacSha256Bytes -PasswordBytes $combined -Salt $Salt -Iterations $validatedIterations -Length 64
-        [byte[]]$encryptionKey = [byte[]]::new(32)
-        [byte[]]$macKey = [byte[]]::new(32)
+        [byte[]]$encryptionKey = (New-Object 'byte[]' 32)
+        [byte[]]$macKey = (New-Object 'byte[]' 32)
         [Buffer]::BlockCopy($derivedBytes, 0, $encryptionKey, 0, 32)
         [Buffer]::BlockCopy($derivedBytes, 32, $macKey, 0, 32)
         return @{ encryptionKey = $encryptionKey; macKey = $macKey }
@@ -160,6 +160,14 @@ function Clear-KeyMaterial {
     }
 }
 
+function Get-HashAlgorithmNameType {
+    foreach ($assembly in [AppDomain]::CurrentDomain.GetAssemblies()) {
+        $type = $assembly.GetType("System.Security.Cryptography.HashAlgorithmName", $false)
+        if ($null -ne $type) { return $type }
+    }
+    return $null
+}
+
 function New-Rfc2898DeriveBytesSha256 {
     param(
         [Parameter(Mandatory)][byte[]]$PasswordBytes,
@@ -167,13 +175,14 @@ function New-Rfc2898DeriveBytesSha256 {
         [Parameter(Mandatory)][int]$Iterations
     )
     try {
-        $hashAlgorithmNameType = [System.Security.Cryptography.HashAlgorithmName]
+        $hashAlgorithmNameType = Get-HashAlgorithmNameType
+        if ($null -eq $hashAlgorithmNameType) { return $null }
         $constructor = [System.Security.Cryptography.Rfc2898DeriveBytes].GetConstructor(
             [type[]]@([byte[]], [byte[]], [int], $hashAlgorithmNameType)
         )
         if ($null -eq $constructor) { return $null }
         $sha256 = $hashAlgorithmNameType.GetProperty("SHA256").GetValue($null, $null)
-        $arguments = [object[]]::new(4)
+        $arguments = New-Object 'object[]' 4
         $arguments[0] = $PasswordBytes
         $arguments[1] = $Salt
         $arguments[2] = $Iterations
@@ -200,8 +209,8 @@ function New-Pbkdf2HmacSha256Bytes {
         }
     }
 
-    [byte[]]$result = [byte[]]::new($Length)
-    $hmac = [System.Security.Cryptography.HMACSHA256]::new()
+    [byte[]]$result = (New-Object 'byte[]' $Length)
+    $hmac = New-Object System.Security.Cryptography.HMACSHA256
     $hmac.Key = $PasswordBytes
     try {
         $hashLength = 32
@@ -211,7 +220,7 @@ function New-Pbkdf2HmacSha256Bytes {
             [byte[]]$blockBytes = ConvertTo-BigEndianUInt32Bytes -Value ([uint32]$block)
             [byte[]]$inputBytes = Join-Bytes -Parts ([byte[][]]@($Salt, $blockBytes))
             [byte[]]$u = $hmac.ComputeHash($inputBytes)
-            [byte[]]$t = [byte[]]::new($u.Length)
+            [byte[]]$t = (New-Object 'byte[]' $u.Length)
             [Buffer]::BlockCopy($u, 0, $t, 0, $u.Length)
             for ($i = 2; $i -le $Iterations; $i++) {
                 $u = $hmac.ComputeHash($u)
@@ -247,7 +256,7 @@ function Test-FixedTimeEquals {
 
 function New-HmacSha256 {
     param([Parameter(Mandatory)][byte[]]$Key, [Parameter(Mandatory)][byte[]]$Data)
-    $hmac = [System.Security.Cryptography.HMACSHA256]::new()
+    $hmac = New-Object System.Security.Cryptography.HMACSHA256
     $hmac.Key = $Key
     try {
         return ,($hmac.ComputeHash($Data))
@@ -259,7 +268,7 @@ function New-HmacSha256 {
 function Join-Bytes {
     param([Parameter(Mandatory)][byte[][]]$Parts)
     $length = ($Parts | Measure-Object -Property Length -Sum).Sum
-    $result = [byte[]]::new($length)
+    $result = (New-Object 'byte[]' $length)
     $offset = 0
     foreach ($part in $Parts) {
         [Buffer]::BlockCopy($part, 0, $result, $offset, $part.Length)
@@ -317,7 +326,19 @@ function New-VaultEnvelope {
 
 function New-AesGcm {
     param([Parameter(Mandatory)][byte[]]$Key)
-    return [System.Security.Cryptography.AesGcm]::new($Key)
+    $aesGcmType = $null
+    foreach ($assembly in [AppDomain]::CurrentDomain.GetAssemblies()) {
+        $aesGcmType = $assembly.GetType("System.Security.Cryptography.AesGcm", $false)
+        if ($null -ne $aesGcmType) { break }
+    }
+    if ($null -eq $aesGcmType) {
+        throw (New-Object System.PlatformNotSupportedException "AES-GCM is unavailable on this runtime")
+    }
+    $constructor = $aesGcmType.GetConstructor([type[]]@([byte[]]))
+    if ($null -eq $constructor) {
+        throw (New-Object System.PlatformNotSupportedException "AES-GCM is unavailable on this runtime")
+    }
+    return $constructor.Invoke([object[]]@($Key))
 }
 
 function Protect-VaultPayload {
@@ -374,8 +395,8 @@ function Protect-VaultPayload {
             return $envelope
         }
 
-        [byte[]]$cipherBytes = [byte[]]::new($plainBytes.Length)
-        [byte[]]$tag = [byte[]]::new(16)
+        [byte[]]$cipherBytes = (New-Object 'byte[]' $plainBytes.Length)
+        [byte[]]$tag = (New-Object 'byte[]' 16)
         [byte[]]$aad = Get-Bytes -Value (ConvertTo-ProtectedHeaderJson -Envelope $envelope)
         $aes = $null
         try {
@@ -507,8 +528,8 @@ function Unprotect-VaultPayload {
         [byte[]]$tag = Get-RequiredBase64Bytes -Value $Envelope.cipher.tag
         Assert-ByteLength -Bytes $nonce -ExpectedLength 12
         Assert-ByteLength -Bytes $tag -ExpectedLength 16
-        $plainBytes = [byte[]]::new($cipherBytes.Length)
-        $aes = [System.Security.Cryptography.AesGcm]::new($keys.encryptionKey)
+        $plainBytes = (New-Object 'byte[]' $cipherBytes.Length)
+        $aes = New-AesGcm -Key $keys.encryptionKey
         try {
             $aes.Decrypt($nonce, $cipherBytes, $tag, $plainBytes, $aad)
         } finally {
