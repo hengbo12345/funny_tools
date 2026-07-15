@@ -9,6 +9,7 @@ Import-Module "$PSScriptRoot/src/PassportVault.Entries.psm1" -Force
 Import-Module "$PSScriptRoot/src/PassportVault.Crypto.psm1" -Force
 Import-Module "$PSScriptRoot/src/PassportVault.Store.psm1" -Force
 
+$script:ClipboardEventJobs = @()
 function Read-EntryPassword {
     param([string]$Prompt = "Entry password")
     $secure = Read-Host -Prompt $Prompt -AsSecureString
@@ -59,6 +60,43 @@ function Select-Entry {
     return $null
 }
 
+function Get-ClipboardValueDigest {
+    param([Parameter(Mandatory)][string]$Value)
+    [byte[]]$valueBytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    [byte[]]$digest = $null
+    try {
+        $digest = $sha256.ComputeHash($valueBytes)
+        return [Convert]::ToBase64String($digest)
+    } finally {
+        $sha256.Dispose()
+        if ($null -ne $valueBytes) { [Array]::Clear($valueBytes, 0, $valueBytes.Length) }
+        if ($null -ne $digest) { [Array]::Clear($digest, 0, $digest.Length) }
+    }
+}
+
+function Remove-CompletedClipboardEventJobs {
+    $remainingJobs = @()
+    foreach ($registration in @($script:ClipboardEventJobs)) {
+        if ($registration.Job.State -in @("Completed", "Failed", "Stopped")) {
+            Remove-Job -Job $registration.Job -Force -ErrorAction SilentlyContinue
+            $registration.Timer.Dispose()
+        } else {
+            $remainingJobs += $registration
+        }
+    }
+    $script:ClipboardEventJobs = $remainingJobs
+}
+
+function Stop-ClipboardClearTimers {
+    foreach ($registration in @($script:ClipboardEventJobs)) {
+        Unregister-Event -SourceIdentifier $registration.SourceIdentifier -ErrorAction SilentlyContinue
+        Remove-Job -Job $registration.Job -Force -ErrorAction SilentlyContinue
+        $registration.Timer.Stop()
+        $registration.Timer.Dispose()
+    }
+    $script:ClipboardEventJobs = @()
+}
 function Start-ClipboardClearTimer {
     param(
         [Parameter(Mandatory)][string]$ExpectedValue,
@@ -69,31 +107,52 @@ function Start-ClipboardClearTimer {
         return $false
     }
 
+    Remove-CompletedClipboardEventJobs
     $timer = $null
+    $eventJob = $null
     $sourceIdentifier = "PassportVault.Clipboard.$([Guid]::NewGuid().ToString('N'))"
     try {
         $timer = [System.Timers.Timer]::new($DelaySeconds * 1000)
         $timer.AutoReset = $false
-        Register-ObjectEvent -InputObject $timer -EventName Elapsed -SourceIdentifier $sourceIdentifier -MessageData @{
-            expectedValue = $ExpectedValue
+        $expectedDigest = Get-ClipboardValueDigest -Value $ExpectedValue
+        $eventJob = Register-ObjectEvent -InputObject $timer -EventName Elapsed -SourceIdentifier $sourceIdentifier -MessageData @{
+            expectedDigest = $expectedDigest
             sourceIdentifier = $sourceIdentifier
             timer = $timer
         } -Action {
+            $currentValue = $null
+            $sha256 = $null
+            [byte[]]$currentBytes = $null
+            [byte[]]$currentDigest = $null
             try {
                 $currentValue = Get-Clipboard -Raw -ErrorAction Stop
-                if ($currentValue -ceq $event.MessageData.expectedValue) {
+                $currentBytes = [System.Text.Encoding]::UTF8.GetBytes([string]$currentValue)
+                $sha256 = [System.Security.Cryptography.SHA256]::Create()
+                $currentDigest = $sha256.ComputeHash($currentBytes)
+                $currentDigestText = [Convert]::ToBase64String($currentDigest)
+                if ($currentDigestText -ceq $event.MessageData.expectedDigest) {
                     Set-Clipboard -Value ([string]::Empty) -ErrorAction Stop
                 }
             } catch {
             } finally {
+                if ($null -ne $sha256) { $sha256.Dispose() }
+                if ($null -ne $currentBytes) { [Array]::Clear($currentBytes, 0, $currentBytes.Length) }
+                if ($null -ne $currentDigest) { [Array]::Clear($currentDigest, 0, $currentDigest.Length) }
+                $currentValue = $null
                 $event.MessageData.timer.Dispose()
                 Unregister-Event -SourceIdentifier $event.MessageData.sourceIdentifier -ErrorAction SilentlyContinue
             }
-        } | Out-Null
+        }
+        $script:ClipboardEventJobs += [pscustomobject]@{
+            Job = $eventJob
+            SourceIdentifier = $sourceIdentifier
+            Timer = $timer
+        }
         $timer.Start()
         return $true
     } catch {
         if ($null -ne $timer) { $timer.Dispose() }
+        if ($null -ne $eventJob) { Remove-Job -Job $eventJob -Force -ErrorAction SilentlyContinue }
         Unregister-Event -SourceIdentifier $sourceIdentifier -ErrorAction SilentlyContinue
         return $false
     }
@@ -253,6 +312,7 @@ try {
 } finally {
     # PowerShell strings are immutable, but dropping references limits their lifetime.
     $password = $null
+    Stop-ClipboardClearTimers
     $confirm = $null
     $vault = $null
 }

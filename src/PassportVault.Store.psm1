@@ -31,6 +31,15 @@ function ConvertTo-Hashtable {
     return $InputObject
 }
 
+function Invoke-VaultFileReplacement {
+    param(
+        [Parameter(Mandatory)][string]$SourcePath,
+        [Parameter(Mandatory)][string]$DestinationPath,
+        [Parameter(Mandatory)][string]$BackupPath
+    )
+    [System.IO.File]::Replace($SourcePath, $DestinationPath, $BackupPath, $true)
+}
+
 function Remove-VaultBackupIfReplaced {
     param(
         [string]$BackupPath,
@@ -72,7 +81,7 @@ function Save-Vault {
         $backupPath = [System.IO.Path]::Combine($directory, ".$fileName.$([System.Guid]::NewGuid().ToString('N')).bak")
         [System.IO.File]::WriteAllText($tempPath, $envelopeJson, [System.Text.Encoding]::UTF8)
         if ([System.IO.File]::Exists($resolvedVaultPath)) {
-            [System.IO.File]::Replace($tempPath, $resolvedVaultPath, $backupPath, $true)
+            Invoke-VaultFileReplacement -SourcePath $tempPath -DestinationPath $resolvedVaultPath -BackupPath $backupPath
             $replacementSucceeded = $true
         } else {
             [System.IO.File]::Move($tempPath, $resolvedVaultPath)

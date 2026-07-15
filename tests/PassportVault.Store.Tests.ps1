@@ -47,17 +47,21 @@ Describe "PassportVault store" {
         { Save-Vault -Vault (New-VaultPayload) -VaultPath $script:path -Password "master" } | Should -Throw "Could not save vault"
     }
 
-    It "preserves a replacement backup until replacement succeeds" {
-        $backupPath = Join-Path $TestDrive "replacement.bak"
-        InModuleScope PassportVault.Store -Parameters @{ BackupPath = $backupPath } {
-            param($BackupPath)
-            [System.IO.File]::WriteAllText($BackupPath, "original")
+    It "preserves the backup when replacement fails during Save-Vault" {
+        InModuleScope PassportVault.Store -Parameters @{ VaultPath = $script:path } {
+            param($VaultPath)
+            $script:replacementBackupPath = $null
+            [System.IO.File]::WriteAllText($VaultPath, "existing vault")
+            Mock -CommandName Invoke-VaultFileReplacement -MockWith {
+                param($SourcePath, $DestinationPath, $BackupPath)
+                $script:replacementBackupPath = $BackupPath
+                [System.IO.File]::WriteAllText($BackupPath, "original vault")
+                throw "replacement failed"
+            }
 
-            Remove-VaultBackupIfReplaced -BackupPath $BackupPath -ReplacementSucceeded $false
-            [System.IO.File]::Exists($BackupPath) | Should -BeTrue
-
-            Remove-VaultBackupIfReplaced -BackupPath $BackupPath -ReplacementSucceeded $true
-            [System.IO.File]::Exists($BackupPath) | Should -BeFalse
+            { Save-Vault -Vault @{ schemaVersion = 1; entries = @() } -VaultPath $VaultPath -Password "master" } |
+                Should -Throw -ExpectedMessage "Could not save vault"
+            [System.IO.File]::Exists($script:replacementBackupPath) | Should -BeTrue
         }
     }
 

@@ -5,7 +5,7 @@ Portable encrypted JSON vault for passport/password entries.
 ## Requirements
 
 - PowerShell 7+
-- Pester for tests
+- Pester 5+ for tests
 
 ## Usage
 
@@ -18,6 +18,15 @@ pwsh ./PassportVault.ps1 -VaultPath ".\passport-vault.dat" -KeyFilePath ".\vault
 When run without `-VaultPath`, the vault is stored beside the script as `passport-vault.dat`.
 
 The vault is encrypted on disk. The entry password and optional key file are required to unlock it. Losing them means the vault cannot be recovered.
+
+When using `-KeyFilePath`, the key file must already exist, be non-empty, and remain unchanged for the lifetime of the vault. Back it up separately from the vault file.
+
+```powershell
+$key = [byte[]]::new(32)
+[System.Security.Cryptography.RandomNumberGenerator]::Fill($key)
+[System.IO.File]::WriteAllBytes(".\vault.key", $key)
+[Array]::Clear($key, 0, $key.Length)
+```
 
 ## Security Notes
 

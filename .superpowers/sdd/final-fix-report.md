@@ -43,3 +43,39 @@ Runtime tests and parser validation were not executed because neither PowerShell
 
 - Pester and PowerShell parser results remain unknown until the branch is run on a host with `pwsh` and Pester.
 - The new framed KDF input intentionally derives different keys from the previous branch implementation. Vault files created by pre-fix commits cannot be unlocked without a migration path.
+
+## Whole-Branch Re-Review Fixes
+
+### Findings Fixed
+
+- The AES-GCM protected-metadata test now uses the valid bounded iteration count `600001`, forces AES-GCM, and asserts the normalized authentication failure.
+- `Save-Vault` now calls the internal `Invoke-VaultFileReplacement` wrapper; the regression test writes a backup, forces that production-path replacement to fail, asserts `Could not save vault`, and verifies the backup remains.
+- Clipboard timers retain returned event jobs, remove completed jobs before scheduling another timer, and remove outstanding jobs, event subscriptions, and timers during top-level cleanup. Event `MessageData` holds a SHA-256 digest instead of the plaintext password.
+- README documents Pester 5+, key-file existence, non-empty and unchanged requirements, separate backup guidance, and a creation example.
+
+### Commands And Results
+
+- `pwsh -NoProfile -Command "Invoke-Pester -Path tests/PassportVault.Crypto.Tests.ps1 -Output Detailed"`: exit 127, `/bin/bash: line 1: pwsh: command not found`.
+- `pwsh -NoProfile -Command "Invoke-Pester -Path tests/PassportVault.Store.Tests.ps1 -Output Detailed"`: exit 127, `/bin/bash: line 1: pwsh: command not found`.
+- `pwsh -NoProfile -Command "Invoke-Pester -Path tests -Output Detailed"`: exit 127, `/bin/bash: line 1: pwsh: command not found`.
+- PowerShell parser command over `PassportVault.ps1`, `src`, and `tests`: exit 127, `/bin/bash: line 1: pwsh: command not found`.
+- `git diff --check`: exit 0 before staging.
+- `git diff --cached --check`: exit 0 before staging.
+- Static scans confirmed `600001`, the replacement wrapper invocation, event-job removal, digest-only event metadata, Pester 5+, and key-file lifecycle documentation.
+
+### Files Changed
+
+- `tests/PassportVault.Crypto.Tests.ps1`
+- `src/PassportVault.Store.psm1`
+- `tests/PassportVault.Store.Tests.ps1`
+- `PassportVault.ps1`
+- `README.md`
+- `.superpowers/sdd/final-fix-report.md`
+
+### Remaining Concerns
+
+### Post-Commit Static Verification
+
+- `git diff --check`: exit 0.
+- `git diff --cached --check`: exit 0.
+- `git show --check --stat --oneline HEAD`: exit 0 for `fe5be3e fix: address passport vault re-review`.

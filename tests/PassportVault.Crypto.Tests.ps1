@@ -83,11 +83,12 @@ Describe "PassportVault crypto" {
         { Unprotect-VaultPayload -Envelope $envelope -Password "right" } | Should -Throw
     }
 
-    It "rejects tampered protected metadata" {
-        $envelope = Protect-VaultPayload -PlainJson '{"schemaVersion":1,"entries":[]}' -Password "right" -Options @{}
-        $envelope.kdf.iterations = 10
+    It "rejects tampered AES-GCM protected metadata" -Skip:(-not $script:AesGcmSupported) {
+        $envelope = Protect-VaultPayload -PlainJson '{"schemaVersion":1,"entries":[]}' -Password "right" -Options @{ ForceCipher = "AES-GCM" }
+        $envelope.kdf.iterations = 600001
 
-        { Unprotect-VaultPayload -Envelope $envelope -Password "right" } | Should -Throw
+        { Unprotect-VaultPayload -Envelope $envelope -Password "right" } |
+            Should -Throw -ExpectedMessage "Could not unlock vault"
     }
     It "round-trips JSON with a non-empty key file" {
         $keyFilePath = Join-Path $TestDrive "vault.key"
