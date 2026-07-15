@@ -39,20 +39,50 @@ function Save-Vault {
         [string]$KeyFilePath
     )
 
-    $plainJson = $Vault | ConvertTo-Json -Depth 20 -Compress
-    $envelope = Protect-VaultPayload -PlainJson $plainJson -Password $Password -Options @{ KeyFilePath = $KeyFilePath }
-    $envelopeJson = $envelope | ConvertTo-Json -Depth 20
-    $directory = Split-Path -Parent $VaultPath
-    if (-not [string]::IsNullOrWhiteSpace($directory)) {
-        New-Item -ItemType Directory -Force -Path $directory | Out-Null
-    }
-    $tempPath = "$VaultPath.tmp"
+    $tempPath = $null
+    $backupPath = $null
     try {
+        $plainJson = $Vault | ConvertTo-Json -Depth 20 -Compress
+        $envelope = Protect-VaultPayload -PlainJson $plainJson -Password $Password -Options @{ KeyFilePath = $KeyFilePath }
+        $envelopeJson = $envelope | ConvertTo-Json -Depth 20
+        $resolvedVaultPath = [System.IO.Path]::GetFullPath($VaultPath)
+        $directory = [System.IO.Path]::GetDirectoryName($resolvedVaultPath)
+        if (-not [string]::IsNullOrWhiteSpace($directory)) {
+            [System.IO.Directory]::CreateDirectory($directory) | Out-Null
+        }
+
+        $fileName = [System.IO.Path]::GetFileName($resolvedVaultPath)
+        $tempPath = [System.IO.Path]::Combine($directory, ".$fileName.$([System.Guid]::NewGuid().ToString('N')).tmp")
+        $backupPath = [System.IO.Path]::Combine($directory, ".$fileName.$([System.Guid]::NewGuid().ToString('N')).bak")
         [System.IO.File]::WriteAllText($tempPath, $envelopeJson, [System.Text.Encoding]::UTF8)
-        Move-Item -LiteralPath $tempPath -Destination $VaultPath -Force
+        if ([System.IO.File]::Exists($resolvedVaultPath)) {
+            [System.IO.File]::Replace($tempPath, $resolvedVaultPath, $backupPath, $true)
+        } else {
+            [System.IO.File]::Move($tempPath, $resolvedVaultPath)
+        }
     } catch {
-        if (Test-Path -LiteralPath $tempPath) { Remove-Item -LiteralPath $tempPath -Force }
+        if ($null -ne $tempPath) {
+            try {
+                if ([System.IO.File]::Exists($tempPath)) { [System.IO.File]::Delete($tempPath) }
+            } catch {}
+        }
+        if ($null -ne $backupPath) {
+            try {
+                if ([System.IO.File]::Exists($backupPath)) { [System.IO.File]::Delete($backupPath) }
+            } catch {}
+        }
         throw "Could not save vault"
+    } finally {
+        if ($null -ne $tempPath) {
+            try {
+                if ([System.IO.File]::Exists($tempPath)) { [System.IO.File]::Delete($tempPath) }
+            } catch {}
+        }
+        if ($null -ne $backupPath) {
+            try {
+                if ([System.IO.File]::Exists($backupPath)) { [System.IO.File]::Delete($backupPath) }
+            } catch {}
+        }
     }
 }
 

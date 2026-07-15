@@ -24,6 +24,29 @@ Describe "PassportVault store" {
         Test-VaultExists -VaultPath $script:path | Should -BeTrue
     }
 
+    It "overwrites an existing vault" {
+        $firstVault = New-VaultPayload
+        $firstVault = Add-VaultEntry -Vault $firstVault -Entry (New-VaultEntry -Name "first" -Username "user" -Password "pass" -Notes "")
+        Save-Vault -Vault $firstVault -VaultPath $script:path -Password "master"
+
+        $secondVault = New-VaultPayload
+        $secondVault = Add-VaultEntry -Vault $secondVault -Entry (New-VaultEntry -Name "second" -Username "user" -Password "pass" -Notes "")
+        Save-Vault -Vault $secondVault -VaultPath $script:path -Password "master"
+
+        $loaded = Load-Vault -VaultPath $script:path -Password "master"
+
+        $loaded.entries | Should -HaveCount 1
+        $loaded.entries[0].name | Should -Be "second"
+    }
+
+    It "sanitizes encryption failures while saving" {
+        Mock -CommandName Protect-VaultPayload -ModuleName PassportVault.Store -MockWith {
+            throw "encryption failed"
+        }
+
+        { Save-Vault -Vault (New-VaultPayload) -VaultPath $script:path -Password "master" } | Should -Throw "Could not save vault"
+    }
+
     It "rejects unsupported vault schema after decrypting" {
         $vault = New-VaultPayload
         $vault.schemaVersion = 99
