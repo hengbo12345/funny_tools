@@ -28,6 +28,19 @@ function Read-RequiredValue {
     return $value
 }
 
+function Get-UserFacingErrorMessage {
+    param([Parameter(Mandatory)][string]$Message)
+    switch ($Message) {
+        "Vault file not found" { return "Vault file not found." }
+        "Could not unlock vault" { return "Could not unlock vault." }
+        "Unsupported vault version" { return "Unsupported vault version." }
+        "Could not save vault" { return "Could not save vault." }
+        "Passwords do not match." { return "Passwords do not match." }
+        "Entry not found" { return "Entry not found." }
+        default { return "Operation failed." }
+    }
+}
+
 function Select-Entry {
     param([Parameter(Mandatory)][hashtable]$Vault)
     if ($Vault.entries.Count -eq 0) {
@@ -83,7 +96,7 @@ function Search-EntriesInteractive {
 function Edit-EntryInteractive {
     param([Parameter(Mandatory)][hashtable]$Vault)
     $entry = Select-Entry -Vault $Vault
-    if ($null -eq $entry) { return $Vault }
+    if ($null -eq $entry) { return $null }
     $name = Read-Host "Name [$($entry.name)]"
     $username = Read-Host "Username [$($entry.username)]"
     $changePassword = Read-Host "Change password? (y/N)"
@@ -93,7 +106,7 @@ function Edit-EntryInteractive {
     if (-not [string]::IsNullOrWhiteSpace($username)) { $changes.username = $username }
     if ($changePassword -eq "y") { $changes.password = Read-EntryPassword -Prompt "New item password" }
     if (-not [string]::IsNullOrWhiteSpace($notes)) { $changes.notes = $notes }
-    if ($changes.Count -eq 0) { return $Vault }
+    if ($changes.Count -eq 0) { return $null }
     return Update-VaultEntry -Vault $Vault -Id $entry.id -Changes $changes
 }
 
@@ -118,7 +131,13 @@ function Show-MainMenu {
             "2" { Search-EntriesInteractive -Vault $Vault }
             "3" { $Vault = Add-EntryInteractive -Vault $Vault; Save-Vault -Vault $Vault -VaultPath $VaultPath -Password $Password -KeyFilePath $KeyFilePath }
             "4" { $entry = Select-Entry -Vault $Vault; if ($entry) { Show-EntryDetails -Entry $entry } }
-            "5" { $Vault = Edit-EntryInteractive -Vault $Vault; Save-Vault -Vault $Vault -VaultPath $VaultPath -Password $Password -KeyFilePath $KeyFilePath }
+            "5" {
+                $updatedVault = Edit-EntryInteractive -Vault $Vault
+                if ($null -ne $updatedVault) {
+                    $Vault = $updatedVault
+                    Save-Vault -Vault $Vault -VaultPath $VaultPath -Password $Password -KeyFilePath $KeyFilePath
+                }
+            }
             "6" {
                 $entry = Select-Entry -Vault $Vault
                 if ($entry -and (Read-Host "Delete $($entry.name)? (y/N)") -eq "y") {
@@ -151,6 +170,6 @@ try {
     }
     Show-MainMenu -Vault $vault -Password $password
 } catch {
-    Write-Host $_.Exception.Message
+    Write-Host (Get-UserFacingErrorMessage -Message $_.Exception.Message)
     exit 1
 }
