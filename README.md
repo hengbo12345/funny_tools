@@ -25,8 +25,29 @@ $env:GOOS = "darwin";  $env:GOARCH = "arm64"; go build -o dist\passportvault-dar
 
 ## Usage
 
+Create a vault once:
+
 ```powershell
 .\passportvault.exe init
+```
+
+Start the interactive session:
+
+```powershell
+.\passportvault.exe
+```
+
+The session unlocks the vault once, then returns to the main menu after each action until you choose quit. You can list, search, open an entry by number, reveal or copy a password, add, edit, delete, and change the master password without rerunning the program.
+
+You can also start the same mode explicitly:
+
+```powershell
+.\passportvault.exe session
+```
+
+One-shot commands are still available for scripting:
+
+```powershell
 .\passportvault.exe add
 .\passportvault.exe list
 .\passportvault.exe search github
@@ -83,6 +104,7 @@ Remove-Item Env:\PASSPORTVAULT_PASSWORD
 - Default KDF is PBKDF2-HMAC-SHA256 with 600000 iterations.
 - Encryption is AES-256-GCM with authenticated vault metadata.
 - Password prompts are hidden on Windows and Unix-like terminals.
+- Interactive copy uses the platform clipboard when available: `clip` on Windows, `pbcopy` on macOS, and `wl-copy`, `xclip`, or `xsel` on Linux.
 - Losing the master password or required key file means the vault cannot be recovered.
 
 ## Future Plan

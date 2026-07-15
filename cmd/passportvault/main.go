@@ -38,6 +38,8 @@ func run(args []string) error {
 	}
 
 	switch command {
+	case "session":
+		return RunInteractiveSession(cfg, password, os.Stdin, os.Stdout)
 	case "init":
 		return commandInit(cfg, password)
 	case "add":
@@ -83,7 +85,7 @@ func parseArgs(args []string) (appConfig, string, []string, error) {
 	}
 	rest := flags.Args()
 	if len(rest) == 0 {
-		return cfg, "", nil, errors.New(usageText())
+		return cfg, "session", nil, nil
 	}
 	return cfg, rest[0], rest[1:], nil
 }
@@ -318,6 +320,8 @@ func usageError(command string) error {
 
 func usageText() string {
 	return `Usage:
+  passportvault [flags]
+  passportvault [flags] session
   passportvault [flags] init
   passportvault [flags] add
   passportvault [flags] list
