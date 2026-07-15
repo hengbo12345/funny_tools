@@ -10,8 +10,13 @@ $script:UnsupportedVaultVersion = "Unsupported vault version"
 function New-RandomBytes {
     param([Parameter(Mandatory)][int]$Length)
     [byte[]]$bytes = [byte[]]::new($Length)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    return ,$bytes
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($bytes)
+        return ,$bytes
+    } finally {
+        $rng.Dispose()
+    }
 }
 
 function Get-Bytes {
@@ -125,20 +130,22 @@ function New-KeyMaterial {
     [byte[]]$passwordBytes = $null
     [byte[]]$keyFileBytes = $null
     [byte[]]$combined = $null
-    $kdf = $null
+    [byte[]]$derivedBytes = $null
     try {
         $validatedIterations = Get-ValidatedPbkdf2Iterations -Value $Iterations
         $passwordBytes = Get-Bytes -Value $Password
         $keyFileBytes = Get-KeyFileBytes -KeyFilePath $KeyFilePath
         $combined = New-FactorFrame -PasswordBytes $passwordBytes -KeyFileBytes $keyFileBytes
-        $kdf = [System.Security.Cryptography.Rfc2898DeriveBytes]::new(
-            $combined, $Salt, $validatedIterations, [System.Security.Cryptography.HashAlgorithmName]::SHA256
-        )
-        return @{ encryptionKey = $kdf.GetBytes(32); macKey = $kdf.GetBytes(32) }
+        [byte[]]$derivedBytes = New-Pbkdf2HmacSha256Bytes -PasswordBytes $combined -Salt $Salt -Iterations $validatedIterations -Length 64
+        [byte[]]$encryptionKey = [byte[]]::new(32)
+        [byte[]]$macKey = [byte[]]::new(32)
+        [Buffer]::BlockCopy($derivedBytes, 0, $encryptionKey, 0, 32)
+        [Buffer]::BlockCopy($derivedBytes, 32, $macKey, 0, 32)
+        return @{ encryptionKey = $encryptionKey; macKey = $macKey }
     } catch {
         throw $script:CouldNotUnlockVault
     } finally {
-        if ($null -ne $kdf) { $kdf.Dispose() }
+        Clear-Bytes -Bytes $derivedBytes
         Clear-Bytes -Bytes $combined
         Clear-Bytes -Bytes $passwordBytes
         Clear-Bytes -Bytes $keyFileBytes
@@ -153,14 +160,95 @@ function Clear-KeyMaterial {
     }
 }
 
+function New-Rfc2898DeriveBytesSha256 {
+    param(
+        [Parameter(Mandatory)][byte[]]$PasswordBytes,
+        [Parameter(Mandatory)][byte[]]$Salt,
+        [Parameter(Mandatory)][int]$Iterations
+    )
+    try {
+        $hashAlgorithmNameType = [System.Security.Cryptography.HashAlgorithmName]
+        $constructor = [System.Security.Cryptography.Rfc2898DeriveBytes].GetConstructor(
+            [type[]]@([byte[]], [byte[]], [int], $hashAlgorithmNameType)
+        )
+        if ($null -eq $constructor) { return $null }
+        $sha256 = $hashAlgorithmNameType.GetProperty("SHA256").GetValue($null, $null)
+        $arguments = [object[]]::new(4)
+        $arguments[0] = $PasswordBytes
+        $arguments[1] = $Salt
+        $arguments[2] = $Iterations
+        $arguments[3] = $sha256
+        return $constructor.Invoke($arguments)
+    } catch {
+        return $null
+    }
+}
+
+function New-Pbkdf2HmacSha256Bytes {
+    param(
+        [Parameter(Mandatory)][byte[]]$PasswordBytes,
+        [Parameter(Mandatory)][byte[]]$Salt,
+        [Parameter(Mandatory)][int]$Iterations,
+        [Parameter(Mandatory)][int]$Length
+    )
+    $kdf = New-Rfc2898DeriveBytesSha256 -PasswordBytes $PasswordBytes -Salt $Salt -Iterations $Iterations
+    if ($null -ne $kdf) {
+        try {
+            return ,($kdf.GetBytes($Length))
+        } finally {
+            $kdf.Dispose()
+        }
+    }
+
+    [byte[]]$result = [byte[]]::new($Length)
+    $hmac = [System.Security.Cryptography.HMACSHA256]::new()
+    $hmac.Key = $PasswordBytes
+    try {
+        $hashLength = 32
+        $blockCount = [int][Math]::Ceiling($Length / $hashLength)
+        $offset = 0
+        for ($block = 1; $block -le $blockCount; $block++) {
+            [byte[]]$blockBytes = ConvertTo-BigEndianUInt32Bytes -Value ([uint32]$block)
+            [byte[]]$inputBytes = Join-Bytes -Parts ([byte[][]]@($Salt, $blockBytes))
+            [byte[]]$u = $hmac.ComputeHash($inputBytes)
+            [byte[]]$t = [byte[]]::new($u.Length)
+            [Buffer]::BlockCopy($u, 0, $t, 0, $u.Length)
+            for ($i = 2; $i -le $Iterations; $i++) {
+                $u = $hmac.ComputeHash($u)
+                for ($j = 0; $j -lt $t.Length; $j++) {
+                    $t[$j] = $t[$j] -bxor $u[$j]
+                }
+            }
+            $toCopy = [Math]::Min($hashLength, $Length - $offset)
+            [Buffer]::BlockCopy($t, 0, $result, $offset, $toCopy)
+            $offset += $toCopy
+            Clear-Bytes -Bytes $blockBytes
+            Clear-Bytes -Bytes $inputBytes
+            Clear-Bytes -Bytes $u
+            Clear-Bytes -Bytes $t
+        }
+        return ,$result
+    } finally {
+        $hmac.Dispose()
+    }
+}
+
 function Test-FixedTimeEquals {
     param([Parameter(Mandatory)][byte[]]$Left, [Parameter(Mandatory)][byte[]]$Right)
-    return [System.Security.Cryptography.CryptographicOperations]::FixedTimeEquals($Left, $Right)
+    $diff = $Left.Length -bxor $Right.Length
+    $maxLength = [Math]::Max($Left.Length, $Right.Length)
+    for ($i = 0; $i -lt $maxLength; $i++) {
+        $leftByte = if ($i -lt $Left.Length) { $Left[$i] } else { 0 }
+        $rightByte = if ($i -lt $Right.Length) { $Right[$i] } else { 0 }
+        $diff = $diff -bor ($leftByte -bxor $rightByte)
+    }
+    return $diff -eq 0
 }
 
 function New-HmacSha256 {
     param([Parameter(Mandatory)][byte[]]$Key, [Parameter(Mandatory)][byte[]]$Data)
-    $hmac = [System.Security.Cryptography.HMACSHA256]::new($Key)
+    $hmac = [System.Security.Cryptography.HMACSHA256]::new()
+    $hmac.Key = $Key
     try {
         return ,($hmac.ComputeHash($Data))
     } finally {
@@ -249,7 +337,7 @@ function Protect-VaultPayload {
         $keyFilePath = if ($Options.ContainsKey("KeyFilePath")) { [string]$Options.KeyFilePath } else { $null }
         $usesKeyFile = -not [string]::IsNullOrWhiteSpace($keyFilePath)
         $forceCipherSpecified = $Options.ContainsKey("ForceCipher")
-        $cipherName = if ($forceCipherSpecified) { [string]$Options.ForceCipher } else { "AES-GCM" }
+        $cipherName = if ($forceCipherSpecified) { [string]$Options.ForceCipher } else { "AES-CBC-HMAC" }
         if ($cipherName -notin @("AES-GCM", "AES-CBC-HMAC")) {
             throw $script:UnsupportedVaultVersion
         }

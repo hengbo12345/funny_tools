@@ -5,14 +5,14 @@ $aesGcmProbe = $null
 try {
     $aesGcmProbe = [System.Security.Cryptography.AesGcm]::new([byte[]]::new(32))
     $script:AesGcmSupported = $true
-} catch [System.PlatformNotSupportedException] {
+} catch {
     $script:AesGcmSupported = $false
 } finally {
     if ($null -ne $aesGcmProbe) { $aesGcmProbe.Dispose() }
 }
 
 Describe "PassportVault crypto" {
-    It "round-trips JSON and selects AES-GCM when supported" {
+    It "round-trips JSON and selects AES-CBC-HMAC by default" {
         $envelope = Protect-VaultPayload -PlainJson '{"schemaVersion":1,"entries":[]}' -Password "correct horse battery staple" -Options @{}
 
         $plain = Unprotect-VaultPayload -Envelope $envelope -Password "correct horse battery staple"
@@ -20,9 +20,9 @@ Describe "PassportVault crypto" {
         $plain | Should -Be '{"schemaVersion":1,"entries":[]}'
         $envelope.format | Should -Be "PassportVault"
         $envelope.kdf.name | Should -Be "PBKDF2-SHA256"
-        if ($script:AesGcmSupported) {
-            $envelope.cipher.name | Should -Be "AES-GCM"
-        }
+        $envelope.cipher.name | Should -Be "AES-CBC-HMAC"
+        $envelope.cipher.iv | Should -Not -BeNullOrEmpty
+        $envelope.cipher.hmac | Should -Not -BeNullOrEmpty
     }
 
     It "returns byte arrays as single objects from byte-array helpers" {
@@ -66,6 +66,14 @@ Describe "PassportVault crypto" {
 
         $keys.encryptionKey.GetType().FullName | Should -Be "System.Byte[]"
         $keys.macKey.GetType().FullName | Should -Be "System.Byte[]"
+    }
+
+    It "compares byte arrays without treating different lengths as equal" {
+        InModuleScope PassportVault.Crypto {
+            Test-FixedTimeEquals -Left ([byte[]](1, 2, 3)) -Right ([byte[]](1, 2, 3)) | Should -BeTrue
+            Test-FixedTimeEquals -Left ([byte[]](1, 2, 3)) -Right ([byte[]](1, 2, 3, 0)) | Should -BeFalse
+            Test-FixedTimeEquals -Left ([byte[]](1, 2, 3)) -Right ([byte[]](1, 2, 4)) | Should -BeFalse
+        }
     }
 
     It "rejects the wrong password" {
@@ -163,7 +171,7 @@ Describe "PassportVault crypto" {
         $envelope.cipher.hmac | Should -Not -BeNullOrEmpty
     }
 
-    It "automatically falls back to AES-CBC-HMAC when AES-GCM is unavailable" {
+    It "does not require AES-GCM for default protection" {
         Mock -CommandName New-AesGcm -ModuleName PassportVault.Crypto -MockWith {
             throw [System.PlatformNotSupportedException]::new("AES-GCM unavailable")
         }
@@ -174,7 +182,7 @@ Describe "PassportVault crypto" {
 
         $plain | Should -Be '{"schemaVersion":1,"entries":[]}'
         $envelope.cipher.name | Should -Be "AES-CBC-HMAC"
-        Should -Invoke -CommandName New-AesGcm -ModuleName PassportVault.Crypto -Times 1 -Exactly
+        Should -Invoke -CommandName New-AesGcm -ModuleName PassportVault.Crypto -Times 0 -Exactly
     }
 
     It "rejects tampered AES-CBC-HMAC protected metadata" {
