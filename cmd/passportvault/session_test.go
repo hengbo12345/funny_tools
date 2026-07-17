@@ -56,6 +56,19 @@ func TestInteractiveSessionSearchRevealAndQuit(t *testing.T) {
 	}
 }
 
+func TestClearViewWritesWhenEnabled(t *testing.T) {
+	output := bytes.NewBuffer(nil)
+	s := &session{out: output, clearScreen: true}
+
+	s.clearView()
+	s.clearView()
+
+	want := "\x1b[3J\x1b[H\x1b[2J\x1b[3J\x1b[H\x1b[2J"
+	if got := output.String(); got != want {
+		t.Fatalf("clear output = %q", got)
+	}
+}
+
 func TestInteractiveSessionAddPersistsEntry(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "vault.dat")

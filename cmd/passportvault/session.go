@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -19,6 +20,8 @@ type session struct {
 	reader   *bufio.Reader
 	out      io.Writer
 	vault    *vault.Vault
+
+	clearScreen bool
 }
 
 func RunInteractiveSession(cfg appConfig, password string, input io.Reader, output io.Writer) error {
@@ -32,12 +35,15 @@ func RunInteractiveSession(cfg appConfig, password string, input io.Reader, outp
 		reader:   bufio.NewReader(input),
 		out:      output,
 		vault:    v,
+
+		clearScreen: isTerminalOutput(output),
 	}
 	return s.loop()
 }
 
 func (s *session) loop() error {
 	for {
+		s.clearView()
 		fmt.Fprintln(s.out)
 		fmt.Fprintln(s.out, "PassportVault")
 		fmt.Fprintln(s.out, "1. List entries")
@@ -90,6 +96,7 @@ func (s *session) loop() error {
 }
 
 func (s *session) listEntries(entries []vault.Entry) error {
+	s.clearView()
 	if len(entries) == 0 {
 		fmt.Fprintln(s.out, "No entries.")
 		return nil
@@ -145,6 +152,7 @@ func (s *session) viewEntryByName() error {
 
 func (s *session) showEntry(entry vault.Entry) error {
 	for {
+		s.clearView()
 		fmt.Fprintln(s.out, "Name:", entry.Name)
 		fmt.Fprintln(s.out, "Username:", entry.Username)
 		fmt.Fprintln(s.out, "Password: ********")
@@ -258,6 +266,7 @@ func (s *session) changePassword() error {
 
 func (s *session) selectEntry(label string) (vault.Entry, bool, error) {
 	entries := s.vault.Search("")
+	s.clearView()
 	if len(entries) == 0 {
 		fmt.Fprintln(s.out, "No entries.")
 		return vault.Entry{}, false, nil
@@ -352,6 +361,25 @@ func (s *session) confirm(label string) bool {
 
 func (s *session) save() error {
 	return vault.SaveFile(s.cfg.vaultPath, s.vault, s.password, s.cfg.keyFilePath)
+}
+
+func (s *session) clearView() {
+	if !s.clearScreen {
+		return
+	}
+	fmt.Fprint(s.out, "\033[3J\033[H\033[2J")
+}
+
+func isTerminalOutput(output io.Writer) bool {
+	file, ok := output.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 func copyToClipboard(value string) error {
