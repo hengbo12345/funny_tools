@@ -273,14 +273,14 @@ mihomo-sub-publisher/
 │   │   ├── dns.go
 │   │   └── probe.go
 │   │
-│   ├── rules/
+│   ├── ruleproviders/
 │   │   ├── provider.go
 │   │   ├── registry.go
 │   │   └── clash_rules_cn.go
 │   │
 │   ├── generator/
 │   │   ├── pipeline.go
-│   │   ├── snapP0+r4B31\shot.go
+│   │   ├── snapshot.go
 │   │   └── metadata.go
 │   │
 │   ├── token/
@@ -304,7 +304,8 @@ mihomo-sub-publisher/
 │   └── tokens.yaml
 │
 ├── data/
-│   └── token-state.json
+│   ├── token-state.json
+│   └── token-reset-requests.json
 │
 ├── cache/
 │   ├── source.yaml
@@ -324,7 +325,7 @@ cache/rules/
 
 删除。
 
-`rules` 模块也不再负责缓存或代理，只负责：
+`ruleproviders` 模块也不再负责缓存或代理，只负责：
 
 > Rule Provider 定义和配置生成。
 
@@ -376,14 +377,19 @@ rules:
   providers:
     clash-rules-cn:
       enabled: true
+      client-path-prefix: "./ruleset/"
 
 server:
   listen: "127.0.0.1:8080"
   config-path: "/config/{token}"
+  shutdown-timeout: 10s
 
 storage:
   cache-dir: "./cache"
   data-dir: "./data"
+
+hot-reload:
+  debounce: 1m
 ```
 
 ---
@@ -410,11 +416,14 @@ rules:
 
     clash-rules-cn:
       enabled: true
+      client-path-prefix: "./ruleset/"
 ```
+
+`client-path-prefix` 是客户端 Mihomo 的本地路径前缀，默认 `./ruleset/`。
 
 服务端内部有一份静态 Provider 定义。
 
-例如逻辑上P0+r4B33\P0+r4B34\P0+r4B35\P0+r6B42\P0+r5053\P0+r5045\：
+例如逻辑上：
 
 ```text
 clash-rules-cn
@@ -438,7 +447,7 @@ clash-rules-cn
 虽然服务端不下载 Provider，但仍建议保留：
 
 ```text
-internal/rules/registry.go
+internal/ruleproviders/registry.go
 ```
 
 原因是：
@@ -509,6 +518,8 @@ path: "./ruleset/..."
 是**客户端 Mihomo 的本地路径**。
 
 不是服务端路径。
+
+路径前缀 `./ruleset/` 可以通过 `client-path-prefix` 配置修改。
 
 ---
 
@@ -1005,27 +1016,24 @@ Atomic Commit
 
 ---
 
-# 27. Source Hash
+# 27. Source Hash 与跳过逻辑
 
-如果：
-
-```text
-old source SHA256
-==
-new source SHA256
-```
-
-并且：
+跳过生成的条件是 Generation Fingerprint 没有变化：
 
 ```text
-extension config hash
-==
-old extension hash
+old fingerprint == new fingerprint
 ```
 
-则可以跳过生成。
+其中 fingerprint 包含：
 
-但以下情况必须重新生成：
+```text
+source_sha256
+config_hash
+generator_version
+mihomo_version
+```
+
+因此以下任何变化都会触发重新生成：
 
 ```text
 source changed
@@ -1034,6 +1042,8 @@ rules changed
 generator version changed
 Mihomo version changed
 ```
+
+不再单独比较 source SHA256 和 extension config hash，统一使用 fingerprint。
 
 ---
 
@@ -1202,6 +1212,16 @@ remaining <= 0
  → quota -1
 ```
 
+错误响应 Body 统一为最小 JSON，不暴露任何细节：
+
+```json
+{"error": "not_found"}
+{"error": "forbidden"}
+{"error": "unavailable"}
+```
+
+不包含 message、reason 或其他调试信息。
+
 ---
 
 # 35. Token 并发
@@ -1240,22 +1260,37 @@ success > limit
 
 # 36. Token Reset
 
-管理员：
-
-```yaml
-reset_remaining: true
-```
-
-热加载：
+管理员创建重置请求文件：
 
 ```text
-remaining = limit
-reset_remaining = false
+data/token-reset-requests.json
 ```
 
-然后原子写回配置。
+内容：
 
-不需要重启。
+```json
+{
+  "resets": ["personal"]
+}
+```
+
+服务端定期检查（与 hot reload debounce 同步）：
+
+```text
+token-reset-requests.json 存在
+ ↓
+解析
+ ↓
+对每个 name：remaining = limit
+ ↓
+持久化 token-state.json
+ ↓
+删除 token-reset-requests.json
+```
+
+不修改 `tokens.yaml`。
+
+服务端不会写回用户编辑的配置文件。
 
 ---
 
@@ -1268,7 +1303,7 @@ tokens.yaml
 File Watcher
      │
      ▼
-Debounce
+Debounce (1 分钟)
      │
      ▼
 Parse
@@ -1283,6 +1318,10 @@ Validate
  ▼        ▼
 旧配置    Atomic Swap
 ```
+
+Debounce 时间由 `hot-reload.debounce` 配置，默认 1 分钟。
+
+同时检查 `data/token-reset-requests.json` 是否存在并处理。
 
 旧 token 修改后立即失效。
 
@@ -1301,10 +1340,14 @@ source / extensions / rules changed
 ```text
 Reload
  ↓
+Debounce (1 分钟)
+ ↓
 Validate
  ↓
 立即重新生成
 ```
+
+Debounce 时间由 `hot-reload.debounce` 配置，默认 1 分钟。
 
 生成失败：
 
@@ -1408,14 +1451,23 @@ atomic.Store()
 
 ```text
 data/
-└── token-state.json
+├── token-state.json
+└── token-reset-requests.json
 ```
 
-quota 修改后同步持久化。
+quota 修改后**批量持久化**，每 1 分钟写入一次。
 
-理由：
+不在每次请求后同步写入。
 
-> Token 次数是业务状态，不能因为服务 crash 导致额度意外恢复。
+如果服务 crash 发生在两次写入之间：
+
+> 最多丢失 1 分钟内的 quota 扣减。
+
+这意味着 crash 后 remaining 可能比实际偏高（多出最多 1 分钟内的下载次数）。
+
+此行为已明确接受。
+
+关闭时（SIGTERM）立即 flush 最终状态。
 
 ---
 
@@ -1440,6 +1492,7 @@ cache/     0700
 ```text
 tokens.yaml
 token-state.json
+token-reset-requests.json
 source.yaml
 generated.yaml
 ```
@@ -1835,12 +1888,16 @@ Stop scheduler
  ↓
 Stop watchers
  ↓
-Shutdown HTTP
+Shutdown HTTP (等待 shutdown-timeout，默认 10s)
  ↓
-Flush state
+Flush token state
  ↓
 Exit
 ```
+
+`shutdown-timeout` 由 `server.shutdown-timeout` 配置。
+
+超时后强制关闭未完成的连接。
 
 ---
 
@@ -1852,7 +1909,7 @@ Exit
 | `source`    | 订阅下载、调度                |
 | `mihomo`    | Mihomo adapter、解析、最终验证 |
 | `extension` | DSL                    |
-| `rules`     | Rule Provider 声明       |
+| `ruleproviders`     | Rule Provider 声明       |
 | `generator` | 配置生成 Pipeline          |
 | `token`     | token、quota、状态         |
 | `server`    | HTTP API               |
