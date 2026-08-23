@@ -1,10 +1,8 @@
-可以。这个调整会让架构更简单，也更符合你的部署环境。
-
-核心变化只有一个，但会影响几个设计点：
+# Mihomo Subscription Publisher 技术设计 v1.1
 
 > **服务端不再托管、缓存或代理 Rule Provider；最终生成的 Mihomo/Clash 配置直接引用 `clash-rules-cn` 等外部 Rule Provider URL，由客户端自行访问 GitHub/CDN 拉取规则。**
 
-因此服务端的职责变成：
+服务端的职责：
 
 ```text
 订阅源
@@ -50,7 +48,7 @@ Mihomo 最终校验
 8. 通过 Token + 过期时间 + 下载次数限制发布配置。
 9. 不使用数据库。
 10. 配置、状态、缓存使用本地文件和内存。
-11. 配置支持热加载。
+11. Token 支持热加载（触发文件模型）；config.yaml 改动需重启。
 12. 新配置必须完整通过解析、扩展和最终 Mihomo 校验后才能发布。
 13. 始终保留 last-known-good 配置。
 14. HTTPS、限流等由前置 Nginx 处理。
@@ -184,13 +182,14 @@ Token
 下载次数
 配置发布
 本地缓存
-配置热加载
+Token 热加载（触发文件模型）
 日志
 ```
 
 ## 服务端不负责
 
 ```text
+config.yaml 热加载（改动需重启，见 §38）
 Rule Provider 下载
 Rule Provider 缓存
 Rule Provider 更新
@@ -254,7 +253,6 @@ mihomo-sub-publisher/
 │   │   ├── loader.go
 │   │   ├── schema.go
 │   │   ├── validator.go
-│   │   └── watcher.go
 │   │
 │   ├── source/
 │   │   ├── fetcher.go
@@ -392,6 +390,10 @@ hot-reload:
   debounce: 1m
 ```
 
+`hot-reload.debounce` 仅用于 token reset 触发文件的 debounce（见 §36.2、§37）。
+
+`config.yaml` 本身不热加载，改动需重启（见 §38）。
+
 ---
 
 # 8. Rule Provider 配置
@@ -521,6 +523,16 @@ path: "./ruleset/..."
 
 路径前缀 `./ruleset/` 可以通过 `client-path-prefix` 配置修改。
 
+## 10.1 路径是客户端相对路径
+
+```text
+path 相对于客户端 Mihomo 的 config 目录
+不同客户端 CWD 可能不同
+./ruleset/ 在部分客户端可能无法解析
+服务端无法保证客户端侧路径可解析
+这是客户端网络/部署环境问题，非服务端职责
+```
+
 ---
 
 # 11. Rule Provider 的网络模型
@@ -600,16 +612,16 @@ urls:
 
 更新责任现在明确分成：
 
-| 内容                | 负责方           |
-| ----------------- | ------------- |
-| 主配置               | Publisher     |
-| 主订阅               | Publisher     |
-| DSL               | Publisher     |
-| Rule Provider URL | Publisher     |
-| Rule Provider 内容  | GitHub/CDN    |
-| Rule Provider 下载  | Mihomo Client |
-| Rule Provider 缓存  | Mihomo Client |
-| Rule Provider 更新  | Mihomo Client |
+| 内容               | 负责方        |
+| ------------------ | ------------- |
+| 主配置             | Publisher     |
+| 主订阅             | Publisher     |
+| DSL                | Publisher     |
+| Rule Provider URL  | Publisher     |
+| Rule Provider 内容 | GitHub/CDN    |
+| Rule Provider 下载 | Mihomo Client |
+| Rule Provider 缓存 | Mihomo Client |
+| Rule Provider 更新 | Mihomo Client |
 
 这样系统职责非常清晰。
 
@@ -721,6 +733,30 @@ extensions:
     append: []
     replace: []
     remove: []
+```
+
+## 16.1 replace / remove 匹配语义
+
+适用于 proxies、proxy-groups、rules 的 `replace` 与 `remove`：
+
+```text
+匹配 0 个  → no-op（不报错，静默跳过）
+匹配多个   → 全部应用
+```
+
+匹配键：
+
+```text
+proxies       → proxy.name
+proxy-groups  → group.name
+rules         → 规则字符串精确匹配
+```
+
+理由：
+
+```text
+no-op 避免「源订阅里没有该节点」导致生成失败
+全部应用保证语义可预期
 ```
 
 ---
@@ -870,6 +906,15 @@ append
 
 最终再稳定去重。
 
+## 21.1 去重语义
+
+```text
+按规则字符串精确去重
+保留首次出现的位置
+RULE-SET,name,PROXY 按完整字符串去重
+相同 name 不同 target 视为不同规则
+```
+
 ---
 
 # 22. Rule Provider 与 Rules 的关系
@@ -932,6 +977,15 @@ extensions:
 
 只覆盖用户指定字段。
 
+## 23.1 合并语义
+
+```text
+override 采用浅合并（shallow merge）
+只覆盖用户显式指定的顶层字段
+未指定字段保留 source 原值
+嵌套 map 不做深合并，整体替换
+```
+
 ---
 
 # 24. Probe
@@ -945,7 +999,23 @@ extensions:
       timeout: 5000
 ```
 
-具体字段最终映射到 Mihomo proxy-group health-check 配置。
+具体字段映射到 Mihomo proxy-group 中的 health-check 配置：
+
+```text
+probe.override.url       → proxy-group.url
+probe.override.interval  → proxy-group.interval
+probe.override.timeout   → proxy-group.timeout
+```
+
+应用范围：所有 type 为 url-test / fallback / load-balance 的 proxy-group。
+
+## 24.1 合并语义
+
+```text
+probe override 同样采用浅合并（见 §23.1）
+只覆盖用户显式指定字段
+未指定字段保留 source 原值
+```
 
 ---
 
@@ -971,6 +1041,16 @@ source:
 * gzip
 * 自定义 Header
 * timeout
+
+## 25.1 重试与退避
+
+```text
+单次 fetch 失败（timeout / 5xx / 网络错误）
+→ 指数退避重试（如 1s, 2s, 4s，最多 3 次）
+→ 仍失败则本轮放弃，保留 last-known-good
+→ 下一个 interval 周期重新尝试
+单次瞬时 5xx 不应直接判定为终态失败
+```
 
 ---
 
@@ -1014,6 +1094,27 @@ Final Validate
 Atomic Commit
 ```
 
+## 26.1 生成串行化
+
+v1 中生成 pipeline 仅由 source scheduler 触发（config.yaml 不热加载，见 §38）。
+
+仍建议保证**同一时刻只有一个生成在跑**：
+
+```text
+单 goroutine 消费 channel
+或
+pipeline 外层加 sync.Mutex
+```
+
+理由：
+
+```text
+scheduler 与启动时的立即 Fetch 可能重叠
+两个并发生成竞争 atomic.Store() 与 tmp/rename（§42）
+会导致 snapshot 与文件不一致
+串行化保证生成、原子提交、内存切换三者一致
+```
+
 ---
 
 # 27. Source Hash 与跳过逻辑
@@ -1033,12 +1134,36 @@ generator_version
 mihomo_version
 ```
 
+## 27.1 config_hash 的范围
+
+`config_hash` **只哈希生成相关字段**，不含基础设施字段：
+
+```text
+纳入 config_hash：
+  source
+  extensions
+  rules.providers
+
+不纳入 config_hash：
+  server
+  storage
+  hot-reload
+```
+
+理由：
+
+```text
+server.listen / storage / hot-reload 等基础设施改动
+不应触发完整重新生成
+避免无关改动 churn snapshot
+```
+
 因此以下任何变化都会触发重新生成：
 
 ```text
 source changed
 extension changed
-rules changed
+rules.providers changed
 generator version changed
 Mihomo version changed
 ```
@@ -1142,6 +1267,15 @@ mixed-port: 7890
 ...
 ```
 
+## 31.1 日志脱敏
+
+```text
+token 出现在 URL 路径 /config/{token}
+会进入 Go 访问日志、Nginx 访问日志、客户端历史
+Nginx 需对路径段做 mask（如 $uri 替换为 ***）
+Go 侧日志同样不得输出完整 token
+```
+
 ---
 
 # 32. Metadata
@@ -1158,23 +1292,58 @@ mixed-port: 7890
 
 同时 HTTP Header 提供相同信息。
 
+## 32.1 实现注意
+
+```text
+Go 的 yaml.v2 / yaml.v3 不保留也不生成注释
+加入 YAML comment 需要自定义序列化或后处理
+例如：序列化后在文件头部拼接 comment 行
+这是实现风险点，非一行代码可完成
+```
+
 ---
 
 # 33. Token
+
+`tokens.yaml` 是 token 定义的 **source of truth**。
 
 ```yaml
 version: 1
 
 tokens:
 
-  - name: personal
+    - name: personal
     token: "random-secret"
     expires_at: "2026-12-31T23:59:59+08:00"
     limit: 1000
-    reset_remaining: false
 ```
 
-运行状态：
+字段说明：
+
+```text
+name        描述性名称，仅用于日志/可读性，可重复
+token       唯一标识，全局唯一，作为 state 的 key
+expires_at  过期时间
+limit       下载次数上限
+```
+
+约束：
+
+```text
+token 必须全局唯一（加载时校验，重复即加载失败、保留旧配置）
+name 建议唯一（便于日志），但不强制
+```
+
+token 生成建议：
+
+```text
+最小长度 32 字符
+使用 crypto/rand 生成
+字符集 [a-zA-Z0-9-_]
+示例：openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+```
+
+运行状态以 **token 为 key**：
 
 ```json
 {
@@ -1222,11 +1391,40 @@ remaining <= 0
 
 不包含 message、reason 或其他调试信息。
 
+错误响应 Content-Type：
+
+```text
+Content-Type: application/json
+```
+
+## 34.1 配额扣减策略
+
+为优先性能与简单，采用**写后扣减**：
+
+```text
+remaining = atomic.Int64.Load()
+if remaining <= 0:
+    拒绝（403）
+else:
+    放行，写 response
+    if write 成功:
+        atomic.Int64.Add(-1)
+```
+
+**允许少量超卖**：极端并发下，多个请求可能同时通过 `remaining > 0` 检查，导致多放行 1~N 次。此行为已明确接受。
+
+不追求「success 次数严格 <= limit」，只保证：
+
+```text
+remaining 不会长期为负
+超卖量级与并发度同阶，可接受
+```
+
 ---
 
 # 35. Token 并发
 
-必须保证：
+采用 `atomic.Int64` 读时扣减（见 §34.1），不加锁、不阻塞。
 
 ```text
 remaining = 1
@@ -1236,71 +1434,147 @@ B ──┼── concurrent
 C ──┘
 ```
 
-最终：
+**允许少量超卖**：极端并发下可能多放行 1~N 次。
+
+不追求严格：
 
 ```text
-A → success
-B → 403
-C → 403
+success 次数 == 1
+remaining 永不为负
 ```
 
-不得出现：
+只保证：
 
 ```text
-remaining = -1
+remaining 不会长期为负
+超卖量级与并发度同阶，可接受
 ```
 
-或者：
-
-```text
-success > limit
-```
+这是为性能与简单做出的明确取舍。
 
 ---
 
-# 36. Token Reset
+# 36. Token Reset（触发文件模型）
 
-管理员创建重置请求文件：
+`token-reset-requests.json` 是**纯触发信号**，不是 token 定义源。
+
+它的作用是：
+
+> 告诉进程「去重新读取 `tokens.yaml`」。
+
+token 定义的唯一 source of truth 始终是 `tokens.yaml`。
+
+## 36.1 触发文件
 
 ```text
 data/token-reset-requests.json
 ```
 
-内容：
+内容仅为时间戳（内容不重要，纯信号）：
 
 ```json
 {
-  "resets": ["personal"]
+    "triggered_at": "2026-08-23T10:00:00Z"
 }
 ```
 
-服务端定期检查（与 hot reload debounce 同步）：
+## 36.2 处理流程
 
 ```text
-token-reset-requests.json 存在
+watcher 检测到 token-reset-requests.json
  ↓
-解析
+Debounce（默认 1 分钟，由 hot-reload.debounce 配置）
  ↓
-对每个 name：remaining = limit
+重读 tokens.yaml
  ↓
-持久化 token-state.json
+解析 + 校验
  ↓
-删除 token-reset-requests.json
+ ┌───┴────┐
+ │           │
+失败     成功
+ │           │
+ ▼           ▼
+保留旧    全量重置
+state     remaining
+            ↓
+      剪除已删除 token
+            ↓
+      立即 flush token-state.json
+            ↓
+      删除 token-reset-requests.json
+            ↓
+      复查：若期间又出现新触发文件，再处理一轮
 ```
 
-不修改 `tokens.yaml`。
+## 36.3 全量重置语义
 
-服务端不会写回用户编辑的配置文件。
+重读 `tokens.yaml` 后，对**所有** token：
+
+```text
+remaining = limit
+```
+
+不区分本次是否变更，一律重置。
+
+理由：
+
+```text
+全量重置是幂等的
+配合「消费触发文件」模型，crash 后重启重放结果一致
+实现最简单，无需 diff 新旧定义
+```
+
+代价：
+
+```text
+管理员只想改一个 token，也会把其他 token 的配额续满
+对小型/个人工具可接受
+```
+
+## 36.4 删除 token 的剪除
+
+重读后，旧 state 中存在、但新 `tokens.yaml` 里没有的 token：
+
+```text
+从 state 中剪除
+```
+
+## 36.5 解析失败
+
+重读 `tokens.yaml` 若解析/校验失败：
+
+```text
+保留旧 state（token 的 last-known-good）
+记 error 日志
+不删除触发文件（下次周期重试）
+```
+
+## 36.6 并发与持久化
+
+```text
+扣减（高频）与重读合并（低频）在同一把锁下操作 state
+避免「读-改-写」覆盖并发扣减
+重读合并完成后立即 flush 一次 token-state.json
+不等 1 分钟批量，避免 crash 丢失刚增/改的 token
+```
+
+## 36.7 不写回配置文件
+
+服务端不会写回 `tokens.yaml`。
+
+`tokens.yaml` 由管理员维护，服务端只读。
 
 ---
 
 # 37. Token Hot Reload
 
+采用**触发文件模型**，不直接 watch `tokens.yaml`。
+
 ```text
-tokens.yaml
+管理员改 tokens.yaml
      │
      ▼
-File Watcher
+File Watcher（监听触发文件）
      │
      ▼
 Debounce (1 分钟)
@@ -1316,44 +1590,63 @@ Validate
 失败     成功
  │        │
  ▼        ▼
-旧配置    Atomic Swap
+旧 state  全量重置 + 剪除 + 立即 flush
 ```
 
 Debounce 时间由 `hot-reload.debounce` 配置，默认 1 分钟。
 
-同时检查 `data/token-reset-requests.json` 是否存在并处理。
+## 37.1 为什么用触发文件而非直接 watch tokens.yaml
 
-旧 token 修改后立即失效。
+```text
+避免直接 watch tokens.yaml 时的半写/部分写入问题
+管理员显式控制重载时机
+触发文件内容仅为时间戳，解析简单
+```
+
+## 37.2 与 config.yaml 的关系
+
+```text
+v1 只有 token 相关变更热加载（触发文件模型）
+config.yaml 不热加载，改动需重启（见 §38）
+因此不存在 config.yaml watcher
+```
+
+## 37.3 安全影响
+
+```text
+token secret 轮换、expires_at 修改、limit 修改
+都必须走 token-reset-requests.json 触发
+改 tokens.yaml 本身不会实时生效，需创建触发文件
+这是可接受的简化，运维需知悉
+```
 
 ---
 
-# 38. 主配置 Hot Reload
+# 38. 主配置不热加载
+
+v1 **不支持** `config.yaml` 热加载。
 
 `config.yaml` 修改：
 
 ```text
-source / extensions / rules changed
+source / extensions / rules.providers / dns / probe
 ```
 
-触发：
+生效方式：
 
 ```text
-Reload
- ↓
-Debounce (1 分钟)
- ↓
-Validate
- ↓
-立即重新生成
+重启服务
 ```
 
-Debounce 时间由 `hot-reload.debounce` 配置，默认 1 分钟。
-
-生成失败：
+理由：
 
 ```text
-旧配置继续发布
+v1 只需 token 相关变更热加载
+config.yaml 改动频率低，重启可接受
+避免引入 config watcher 与生成串行化的复杂度
 ```
+
+生成 pipeline 仅由 source scheduler 触发（见 §26.1）。
 
 ---
 
@@ -1414,6 +1707,17 @@ cache/generated.yaml
 /config/{token} → 503
 ```
 
+## 41.1 启动窗口
+
+```text
+HTTP 先于首次 source update 启动（见 §56）
+存在一个窗口期：
+  有 on-disk snapshot → /config 返回旧配置
+  无 on-disk snapshot → /config 返回 503
+首次 source update 成功后才切换到新 snapshot
+此窗口期行为可接受，需知悉
+```
+
 ---
 
 # 42. 原子更新
@@ -1444,6 +1748,15 @@ atomic.Store()
 ```
 
 文件和内存都采用原子切换。
+
+## 42.1 文件权限
+
+```text
+tmp 文件必须先以 0600 创建，再 rename
+rename 保留 tmp 文件的权限
+若 tmp 以默认权限创建，最终 generated.yaml 可能 world-readable
+token-state.json / token-reset-requests.json 同理
+```
 
 ---
 
@@ -1613,6 +1926,14 @@ Go 服务：
 
 > 不直接暴露公网。
 
+## 48.1 日志脱敏
+
+```text
+Nginx 访问日志需 mask /config/{token} 的路径段
+避免 token 落入日志文件
+Go 侧日志同样不得输出完整 token（见 §45）
+```
+
 ---
 
 # 49. 客户端网络要求
@@ -1729,7 +2050,7 @@ raw.githubusercontent.com
 
 重点测试：
 
-### Source
+## Source
 
 ```text
 正常
@@ -1741,7 +2062,7 @@ redirect
 gzip
 ```
 
-### DSL
+## DSL
 
 ```text
 prepend
@@ -1754,7 +2075,7 @@ unknown group
 unknown Rule Provider
 ```
 
-### Token
+## Token
 
 ```text
 不存在
@@ -1766,7 +2087,7 @@ reload
 reset
 ```
 
-### Snapshot
+## Snapshot
 
 ```text
 首次成功
@@ -1776,7 +2097,7 @@ reset
 原子替换
 ```
 
-### Rule Provider
+## Rule Provider
 
 主要测试：
 
@@ -1814,16 +2135,18 @@ config reload failure
 
 # 54. Mihomo 版本
 
-固定版本：
+固定版本，不要 `@main`：
 
 ```go
-github.com/metacubex/mihomo vX.Y.Z
+github.com/MetaCubeX/mihomo vX.Y.Z
 ```
 
-不要：
+注意：
 
 ```text
-@main
+项目已从 metacubex/mihomo 迁移到 MetaCubeX/mihomo（org 改名）
+实现前需核实当前 canonical 导入路径
+旧路径 metacubex/mihomo 可能已失效
 ```
 
 同时记录：
@@ -1872,7 +2195,7 @@ Validate snapshot
  ↓
 Start HTTP
  ↓
-Start watchers
+Start token reset watcher
  ↓
 立即 source update
  ↓
@@ -1886,7 +2209,7 @@ SIGTERM
  ↓
 Stop scheduler
  ↓
-Stop watchers
+Stop token reset watcher
  ↓
 Shutdown HTTP (等待 shutdown-timeout，默认 10s)
  ↓
@@ -1903,18 +2226,18 @@ Exit
 
 # 57. 模块职责
 
-| Module      | 职责                     |
-| ----------- | ---------------------- |
-| `config`    | 配置读取、校验、热加载            |
-| `source`    | 订阅下载、调度                |
-| `mihomo`    | Mihomo adapter、解析、最终验证 |
-| `extension` | DSL                    |
-| `ruleproviders`     | Rule Provider 声明       |
-| `generator` | 配置生成 Pipeline          |
-| `token`     | token、quota、状态         |
-| `server`    | HTTP API               |
-| `storage`   | 原子文件                   |
-| `app`       | 生命周期协调                 |
+| Module          | 职责                                   |
+| --------------- | -------------------------------------- |
+| `config`        | 配置读取、校验（启动时加载，不热加载） |
+| `source`        | 订阅下载、调度                         |
+| `mihomo`        | Mihomo adapter、解析、最终验证         |
+| `extension`     | DSL                                    |
+| `ruleproviders` | Rule Provider 声明                     |
+| `generator`     | 配置生成 Pipeline                      |
+| `token`         | token、quota、状态、热加载（触发文件） |
+| `server`        | HTTP API                               |
+| `storage`       | 原子文件                               |
+| `app`           | 生命周期协调                           |
 
 ---
 
@@ -1926,6 +2249,7 @@ Exit
 多订阅合并
 JavaScript Script
 服务端节点测速
+config.yaml 热加载（改动需重启，见 §38）
 数据库
 Web 管理后台
 在线编辑配置
@@ -2016,9 +2340,9 @@ Publisher
 
 因此 v1.1 的核心定义可以正式确定为：
 
-> **这是一个 Go 实现的 Mihomo Subscription Publisher。服务端从单一 Mihomo YAML 订阅源定期拉取配置，使用 Mihomo 原生库完成解析和最终验证，通过声明式 Go DSL 对 proxies、proxy-groups、rules、DNS 和探测配置进行扩展，并生成对外部 Rule Provider（如 `clash-rules-cn`）的引用。服务端不访问、缓存或代理 Rule Provider，客户端 Mihomo/Clash 自行从 GitHub/CDN 拉取规则。生成过程采用 last-known-good 和原子替换机制，通过 Token、过期时间和下载次数控制配置发布。系统不使用数据库，采用本地文件和内存快照，配置支持热加载，Nginx 负责 HTTPS 和限流。**
+> **这是一个 Go 实现的 Mihomo Subscription Publisher。服务端从单一 Mihomo YAML 订阅源定期拉取配置，使用 Mihomo 原生库完成解析和最终验证，通过声明式 Go DSL 对 proxies、proxy-groups、rules、DNS 和探测配置进行扩展，并生成对外部 Rule Provider（如 `clash-rules-cn`）的引用。服务端不访问、缓存或代理 Rule Provider，客户端 Mihomo/Clash 自行从 GitHub/CDN 拉取规则。生成过程采用 last-known-good 和原子替换机制，通过 Token、过期时间和下载次数控制配置发布。系统不使用数据库，采用本地文件和内存快照，Token 支持热加载（触发文件模型），config.yaml 改动需重启，Nginx 负责 HTTPS 和限流。**
 
-### 最终数据流
+## 最终数据流
 
 ```text
                     ┌──────────────────┐
