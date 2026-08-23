@@ -1,0 +1,7 @@
+version: 1
+
+tokens:
+  - name: personal
+    token: "example-secret-token-please-change-me"
+    expires_at: "2099-12-31T23:59:59+08:00"
+    limit: 1000

@@ -1,0 +1,53 @@
+version: 1
+
+source:
+  url: "https://example.com/subscription.yaml"
+  interval: 1h
+  timeout: 30s
+  headers:
+    User-Agent: "mihomo-sub-publisher/1.0"
+
+extensions:
+  proxies:
+    prepend: []
+    append: []
+    replace: []
+    remove: []
+
+  proxy-groups:
+    prepend: []
+    append: []
+    replace: []
+    remove: []
+
+  rules:
+    prepend:
+      - "RULE-SET,direct-domain,DIRECT"
+    append:
+      - "MATCH,PROXY"
+    replace: []
+    remove: []
+
+  dns:
+    override: {}
+
+  probe:
+    override: {}
+
+rules:
+  providers:
+    clash-rules-cn:
+      enabled: true
+      client-path-prefix: "./ruleset/"
+
+server:
+  listen: "127.0.0.1:8080"
+  config-path: "/config/{token}"
+  shutdown-timeout: 10s
+
+storage:
+  cache-dir: "./cache"
+  data-dir: "./data"
+
+hot-reload:
+  debounce: 1m
