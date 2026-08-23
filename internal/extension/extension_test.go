@@ -66,11 +66,11 @@ func TestApplyProxyGroupsInjection(t *testing.T) {
 		Inject: []config.ProxyGroupInject{
 			{
 				Target:         "*",
-				PrependProxies: []string{"UK 自用代理", "JP 自用代理"},
+				PrependProxies: []string{"node-a", "node-b"},
 			},
 			{
 				Target:        "GPT",
-				AppendProxies: []string{"US 自用代理"},
+				AppendProxies: []string{"node-c"},
 			},
 		},
 	}
@@ -80,9 +80,9 @@ func TestApplyProxyGroupsInjection(t *testing.T) {
 		t.Fatalf("expected 2 groups, got %d", len(res))
 	}
 
-	// Group "Proxy" should have UK, JP prepended
+	// Group "Proxy" should have node-a, node-b prepended
 	proxyList := res[0]["proxies"].([]any)
-	expectedProxy := []string{"UK 自用代理", "JP 自用代理", "AUTO", "DIRECT"}
+	expectedProxy := []string{"node-a", "node-b", "AUTO", "DIRECT"}
 	if len(proxyList) != len(expectedProxy) {
 		t.Fatalf("expected %d proxies in Proxy group, got %d: %v", len(expectedProxy), len(proxyList), proxyList)
 	}
@@ -92,9 +92,9 @@ func TestApplyProxyGroupsInjection(t *testing.T) {
 		}
 	}
 
-	// Group "GPT" should have UK, JP prepended and US appended
+	// Group "GPT" should have node-a, node-b prepended and node-c appended
 	gptList := res[1]["proxies"].([]any)
-	expectedGPT := []string{"UK 自用代理", "JP 自用代理", "Proxy", "DIRECT", "US 自用代理"}
+	expectedGPT := []string{"node-a", "node-b", "Proxy", "DIRECT", "node-c"}
 	if len(gptList) != len(expectedGPT) {
 		t.Fatalf("expected %d proxies in GPT group, got %d: %v", len(expectedGPT), len(gptList), gptList)
 	}
