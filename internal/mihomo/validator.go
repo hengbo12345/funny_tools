@@ -66,10 +66,6 @@ func ValidateRaw(raw *mihomoCfg.RawConfig) error {
 		if pURL == "" {
 			return fmt.Errorf("rule-provider %q missing 'url'", name)
 		}
-		path, _ := provider["path"].(string)
-		if path == "" {
-			return fmt.Errorf("rule-provider %q missing 'path'", name)
-		}
 	}
 
 	// 4. Validate Rules and §22 RULE-SET references

@@ -131,6 +131,13 @@ func (p *Pipeline) Run(ctx context.Context, inputResult *source.FetchResult) (*S
 		}
 	}
 
+	// Ensure any source rule-providers also have a default path if not specified
+	for name, pMap := range rawConfig.RuleProvider {
+		if path, ok := pMap["path"].(string); !ok || path == "" {
+			pMap["path"] = "./ruleset/" + name + ".yaml"
+		}
+	}
+
 	// 6. Serialize raw configuration to YAML
 	yamlBytes, err := yaml.Marshal(rawConfig)
 	if err != nil {
