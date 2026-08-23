@@ -52,6 +52,14 @@ type ProxyGroupsExtension struct {
 	Append  []map[string]any    `yaml:"append"`
 	Replace []ProxyGroupReplace `yaml:"replace"`
 	Remove  []string            `yaml:"remove"`
+	Inject  []ProxyGroupInject  `yaml:"inject"`
+}
+
+// ProxyGroupInject defines injection of proxy names into existing proxy-groups.
+type ProxyGroupInject struct {
+	Target         string   `yaml:"target"`
+	PrependProxies []string `yaml:"prepend-proxies"`
+	AppendProxies  []string `yaml:"append-proxies"`
 }
 
 // ProxyGroupReplace defines replacement for a proxy group matching name.

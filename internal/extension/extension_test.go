@@ -48,6 +48,63 @@ func TestApplyProxies(t *testing.T) {
 	}
 }
 
+func TestApplyProxyGroupsInjection(t *testing.T) {
+	groups := []map[string]any{
+		{
+			"name":    "Proxy",
+			"type":    "select",
+			"proxies": []any{"AUTO", "DIRECT"},
+		},
+		{
+			"name":    "GPT",
+			"type":    "select",
+			"proxies": []any{"Proxy", "DIRECT"},
+		},
+	}
+
+	ext := config.ProxyGroupsExtension{
+		Inject: []config.ProxyGroupInject{
+			{
+				Target:         "*",
+				PrependProxies: []string{"UK 自用代理", "JP 自用代理"},
+			},
+			{
+				Target:        "GPT",
+				AppendProxies: []string{"US 自用代理"},
+			},
+		},
+	}
+
+	res := ApplyProxyGroups(groups, ext)
+	if len(res) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(res))
+	}
+
+	// Group "Proxy" should have UK, JP prepended
+	proxyList := res[0]["proxies"].([]any)
+	expectedProxy := []string{"UK 自用代理", "JP 自用代理", "AUTO", "DIRECT"}
+	if len(proxyList) != len(expectedProxy) {
+		t.Fatalf("expected %d proxies in Proxy group, got %d: %v", len(expectedProxy), len(proxyList), proxyList)
+	}
+	for i, exp := range expectedProxy {
+		if proxyList[i] != exp {
+			t.Errorf("Proxy[%d] = %v, want %v", i, proxyList[i], exp)
+		}
+	}
+
+	// Group "GPT" should have UK, JP prepended and US appended
+	gptList := res[1]["proxies"].([]any)
+	expectedGPT := []string{"UK 自用代理", "JP 自用代理", "Proxy", "DIRECT", "US 自用代理"}
+	if len(gptList) != len(expectedGPT) {
+		t.Fatalf("expected %d proxies in GPT group, got %d: %v", len(expectedGPT), len(gptList), gptList)
+	}
+	for i, exp := range expectedGPT {
+		if gptList[i] != exp {
+			t.Errorf("GPT[%d] = %v, want %v", i, gptList[i], exp)
+		}
+	}
+}
+
 func TestApplyRulesDeduplication(t *testing.T) {
 	initial := []string{
 		"DOMAIN-SUFFIX,google.com,PROXY",

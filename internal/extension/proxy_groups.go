@@ -4,7 +4,7 @@ import (
 	"mihomo-sub-publisher/internal/config"
 )
 
-// ApplyProxyGroups applies prepend, append, replace, and remove operations on proxy-groups list.
+// ApplyProxyGroups applies prepend, append, replace, remove, and inject operations on proxy-groups list.
 func ApplyProxyGroups(groups []map[string]any, ext config.ProxyGroupsExtension) []map[string]any {
 	result := make([]map[string]any, 0, len(groups)+len(ext.Prepend)+len(ext.Append))
 
@@ -45,5 +45,68 @@ func ApplyProxyGroups(groups []map[string]any, ext config.ProxyGroupsExtension) 
 		result = append(result, cloneMap(g))
 	}
 
+	// 4. Inject proxies into target groups
+	if len(ext.Inject) > 0 {
+		for _, g := range result {
+			applyProxyGroupInject(g, ext.Inject)
+		}
+	}
+
 	return result
+}
+
+func applyProxyGroupInject(group map[string]any, injects []config.ProxyGroupInject) {
+	name, _ := group["name"].(string)
+	rawProxies, exists := group["proxies"]
+	if !exists || rawProxies == nil {
+		return
+	}
+
+	var currentList []any
+	if slice, ok := rawProxies.([]any); ok {
+		currentList = make([]any, len(slice))
+		copy(currentList, slice)
+	} else if strSlice, ok := rawProxies.([]string); ok {
+		currentList = make([]any, len(strSlice))
+		for i, s := range strSlice {
+			currentList[i] = s
+		}
+	} else {
+		return
+	}
+
+	seen := make(map[string]struct{}, len(currentList))
+	for _, p := range currentList {
+		if s, ok := p.(string); ok {
+			seen[s] = struct{}{}
+		}
+	}
+
+	for _, inj := range injects {
+		if inj.Target != "*" && inj.Target != name {
+			continue
+		}
+
+		// 1. Prepend proxies
+		var toPrepend []any
+		for _, pName := range inj.PrependProxies {
+			if _, already := seen[pName]; !already {
+				seen[pName] = struct{}{}
+				toPrepend = append(toPrepend, pName)
+			}
+		}
+		if len(toPrepend) > 0 {
+			currentList = append(toPrepend, currentList...)
+		}
+
+		// 2. Append proxies
+		for _, pName := range inj.AppendProxies {
+			if _, already := seen[pName]; !already {
+				seen[pName] = struct{}{}
+				currentList = append(currentList, pName)
+			}
+		}
+	}
+
+	group["proxies"] = currentList
 }
