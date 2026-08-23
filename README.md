@@ -85,6 +85,37 @@ cp configs/tokens.yaml configs/tokens.yaml
 - `-json-log`: 是否输出 JSON 格式日志（默认 `true`）
 - `-version`: 显示程序版本信息
 
+### 3. Docker 与 Docker Compose 部署
+
+#### 方式一：Docker 单容器运行
+```bash
+# 构建镜像
+docker build -t mihomo-sub-publisher:latest .
+
+# 运行容器
+docker run -d \
+  --name mihomo-publisher \
+  -p 8080:8080 \
+  -v $(pwd)/configs:/app/configs:ro \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/cache:/app/cache \
+  mihomo-sub-publisher:latest
+```
+
+#### 方式二：Docker Compose + Nginx 反向代理
+1. 配置 `configs/config.yaml` 与 `configs/tokens.yaml`。
+2. 将 SSL 证书放入 `deploy/nginx/ssl/`（`fullchain.pem` 和 `privkey.pem`）。
+3. 修改 `deploy/nginx/nginx.conf` 中的域名为您的实际域名。
+4. 一键启动：
+```bash
+docker compose up -d
+```
+
+Nginx 示例配置包含：
+- **Token 日志脱敏**：自动将访问日志中的 `/config/<token>` 转换为 `/config/***`，避免 Token 泄露。
+- **速率限制**：配置 `limit_req` 防止高频滥刷。
+- **安全隔离**：默认禁止外部公网直接访问 `/status` 管理端点。
+
 ---
 
 ## 🔄 Token 热加载与重置
