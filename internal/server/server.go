@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -210,8 +209,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 		if errors.Is(err, token.ErrTokenNotFound) {
 			s.writeJSONError(w, http.StatusNotFound, "not_found")
-		} else if errors.Is(err, token.ErrTokenExpired) || errors.Is(err, token.ErrTokenExhausted) {
-			s.writeJSONError(w, http.StatusForbidden, "forbidden")
 		} else {
 			s.writeJSONError(w, http.StatusForbidden, "forbidden")
 		}
@@ -261,20 +258,7 @@ func (s *Server) isExpectedRequest(r *http.Request) bool {
 	if len(s.cfg.Server.AllowedUserAgents) > 0 {
 		for _, pattern := range s.cfg.Server.AllowedUserAgents {
 			lowerPat := strings.ToLower(strings.TrimSpace(pattern))
-			if lowerPat == "*" {
-				uaMatched = true
-				break
-			}
-			if strings.HasPrefix(lowerPat, "*") && strings.HasSuffix(lowerPat, "*") && len(lowerPat) > 2 {
-				sub := lowerPat[1 : len(lowerPat)-1]
-				if strings.Contains(lowerUA, sub) {
-					uaMatched = true
-					break
-				}
-			} else if matched, _ := filepath.Match(lowerPat, lowerUA); matched {
-				uaMatched = true
-				break
-			} else if strings.Contains(lowerUA, lowerPat) {
+			if matchWildcard(lowerPat, lowerUA) {
 				uaMatched = true
 				break
 			}
@@ -303,6 +287,28 @@ func (s *Server) isExpectedRequest(r *http.Request) bool {
 	}
 
 	return true
+}
+
+func matchWildcard(pattern, text string) bool {
+	if pattern == "*" || pattern == text {
+		return true
+	}
+	parts := strings.Split(pattern, "*")
+	if len(parts) == 1 {
+		return pattern == text
+	}
+	if !strings.HasPrefix(text, parts[0]) {
+		return false
+	}
+	text = text[len(parts[0]):]
+	for i := 1; i < len(parts)-1; i++ {
+		idx := strings.Index(text, parts[i])
+		if idx == -1 {
+			return false
+		}
+		text = text[idx+len(parts[i]):]
+	}
+	return strings.HasSuffix(text, parts[len(parts)-1])
 }
 
 func (s *Server) writeJSONError(w http.ResponseWriter, code int, errCode string) {

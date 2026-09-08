@@ -78,24 +78,13 @@ func (p *Pipeline) Run(ctx context.Context, inputResult *source.FetchResult) (*S
 	if currentSnap != nil && currentSnap.Fingerprint == fingerprint {
 		logger.Info("generation skipped: fingerprint unchanged", "fingerprint", fingerprint)
 		if !headersEqual(currentSnap.Headers, fetchRes.Headers) {
+			// updatedSnap is a copy of currentSnap with updated headers; Content byte slice is immutable.
 			updatedSnap := *currentSnap
 			updatedSnap.Headers = fetchRes.Headers
 			updatedSnap.SourceUpdatedAt = fetchRes.UpdatedAt
 			p.snapshotMgr.Swap(&updatedSnap)
 
-			cacheDir := p.cfg.Storage.CacheDir
-			meta := Metadata{
-				Version:         updatedSnap.Version,
-				Fingerprint:     updatedSnap.Fingerprint,
-				SourceSHA256:    updatedSnap.SourceSHA256,
-				SHA256:          updatedSnap.SHA256,
-				GeneratedAt:     updatedSnap.GeneratedAt,
-				SourceUpdatedAt: updatedSnap.SourceUpdatedAt,
-				Headers:         updatedSnap.Headers,
-			}
-			if metaJSON, err := meta.ToJSON(); err == nil {
-				_ = storage.AtomicWriteFile(filepath.Join(cacheDir, "generated.yaml.meta.json"), metaJSON, storage.DefaultFilePerm)
-			}
+			p.saveMetadata(p.cfg.Storage.CacheDir, updatedSnap.ToMetadata())
 			return &updatedSnap, nil
 		}
 		return currentSnap, nil
@@ -192,14 +181,16 @@ func (p *Pipeline) Run(ctx context.Context, inputResult *source.FetchResult) (*S
 	}
 
 	newSnap := &Snapshot{
-		Version:         newVersion,
-		SourceUpdatedAt: fetchRes.UpdatedAt,
-		GeneratedAt:     generatedAt,
-		SHA256:          finalSHAStr,
-		SourceSHA256:    fetchRes.SHA256,
-		Fingerprint:     fingerprint,
-		Headers:         fetchRes.Headers,
-		Content:         finalYAML,
+		Metadata: Metadata{
+			Version:         newVersion,
+			SourceUpdatedAt: fetchRes.UpdatedAt,
+			GeneratedAt:     generatedAt,
+			SHA256:          finalSHAStr,
+			SourceSHA256:    fetchRes.SHA256,
+			Fingerprint:     fingerprint,
+			Headers:         fetchRes.Headers,
+		},
+		Content: finalYAML,
 	}
 
 	// 10. Write cache files to disk atomically
@@ -207,27 +198,31 @@ func (p *Pipeline) Run(ctx context.Context, inputResult *source.FetchResult) (*S
 	if err := storage.EnsureDir(cacheDir, storage.DefaultDirPerm); err != nil {
 		logger.Error("failed to create cache dir", "dir", cacheDir, "error", err)
 	} else {
-		_ = storage.AtomicWriteFile(filepath.Join(cacheDir, "source.yaml"), fetchRes.Content, storage.DefaultFilePerm)
-		_ = storage.AtomicWriteFile(filepath.Join(cacheDir, "generated.yaml"), finalYAML, storage.DefaultFilePerm)
-
-		meta := Metadata{
-			Version:         newSnap.Version,
-			Fingerprint:     newSnap.Fingerprint,
-			SourceSHA256:    newSnap.SourceSHA256,
-			SHA256:          newSnap.SHA256,
-			GeneratedAt:     newSnap.GeneratedAt,
-			SourceUpdatedAt: newSnap.SourceUpdatedAt,
-			Headers:         newSnap.Headers,
+		if err := storage.AtomicWriteFile(filepath.Join(cacheDir, "source.yaml"), fetchRes.Content, storage.DefaultFilePerm); err != nil {
+			logger.Warn("failed to write source.yaml to cache", "error", err)
 		}
-		if metaJSON, err := meta.ToJSON(); err == nil {
-			_ = storage.AtomicWriteFile(filepath.Join(cacheDir, "generated.yaml.meta.json"), metaJSON, storage.DefaultFilePerm)
+		if err := storage.AtomicWriteFile(filepath.Join(cacheDir, "generated.yaml"), finalYAML, storage.DefaultFilePerm); err != nil {
+			logger.Warn("failed to write generated.yaml to cache", "error", err)
 		}
+		p.saveMetadata(cacheDir, newSnap.ToMetadata())
 	}
 
 	// 11. Atomic swap in memory
 	p.snapshotMgr.Swap(newSnap)
 	logger.Info("generation.success", "version", newSnap.Version, "sha256", newSnap.SHA256)
 	return newSnap, nil
+}
+
+func (p *Pipeline) saveMetadata(cacheDir string, meta Metadata) {
+	logger := logging.Logger()
+	metaJSON, err := meta.ToJSON()
+	if err != nil {
+		logger.Warn("failed to serialize metadata JSON", "error", err)
+		return
+	}
+	if err := storage.AtomicWriteFile(filepath.Join(cacheDir, "generated.yaml.meta.json"), metaJSON, storage.DefaultFilePerm); err != nil {
+		logger.Warn("failed to write generated.yaml.meta.json", "error", err)
+	}
 }
 
 func headersEqual(a, b map[string]string) bool {

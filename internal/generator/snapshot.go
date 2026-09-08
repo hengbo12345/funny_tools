@@ -63,15 +63,10 @@ func (m *SnapshotManager) Restore(cacheDir string) (*Snapshot, error) {
 	hash := sha256.Sum256(content)
 	shaStr := hex.EncodeToString(hash[:])
 
+	meta.SHA256 = shaStr
 	snap := &Snapshot{
-		Version:         meta.Version,
-		SourceUpdatedAt: meta.SourceUpdatedAt,
-		GeneratedAt:     meta.GeneratedAt,
-		SHA256:          shaStr,
-		SourceSHA256:    meta.SourceSHA256,
-		Fingerprint:     meta.Fingerprint,
-		Headers:         meta.Headers,
-		Content:         content,
+		Metadata: meta,
+		Content:  content,
 	}
 
 	m.Swap(snap)

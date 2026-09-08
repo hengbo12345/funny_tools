@@ -19,18 +19,6 @@ var (
 	MihomoVersion = "1.19.30"
 )
 
-// Snapshot represents an immutable generated configuration in memory.
-type Snapshot struct {
-	Version         uint64            `json:"version"`
-	SourceUpdatedAt time.Time         `json:"source_updated_at"`
-	GeneratedAt     time.Time         `json:"generated_at"`
-	SHA256          string            `json:"sha256"`
-	SourceSHA256    string            `json:"source_sha256"`
-	Fingerprint     string            `json:"fingerprint"`
-	Headers         map[string]string `json:"headers,omitempty"`
-	Content         []byte            `json:"-"`
-}
-
 // Metadata represents generated.yaml.meta.json on disk.
 type Metadata struct {
 	Version         uint64            `json:"version"`
@@ -40,6 +28,17 @@ type Metadata struct {
 	GeneratedAt     time.Time         `json:"generated_at"`
 	SourceUpdatedAt time.Time         `json:"source_updated_at"`
 	Headers         map[string]string `json:"headers,omitempty"`
+}
+
+// Snapshot represents an immutable generated configuration in memory.
+type Snapshot struct {
+	Metadata
+	Content []byte `json:"-"`
+}
+
+// ToMetadata returns a copy of the snapshot's Metadata.
+func (s *Snapshot) ToMetadata() Metadata {
+	return s.Metadata
 }
 
 // ComputeConfigHash calculates a stable SHA256 over generation-relevant config fields.

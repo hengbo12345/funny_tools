@@ -92,10 +92,12 @@ func TestServerHealthAndStatus(t *testing.T) {
 
 	// 3. Status with snapshot
 	snapMgr.Swap(&generator.Snapshot{
-		Version:         1,
-		SourceUpdatedAt: time.Now(),
-		GeneratedAt:     time.Now(),
-		SHA256:          "sha123",
+		Metadata: generator.Metadata{
+			Version:         1,
+			SourceUpdatedAt: time.Now(),
+			GeneratedAt:     time.Now(),
+			SHA256:          "sha123",
+		},
 	})
 	resp, err = http.Get(baseURL + "/status")
 	if err != nil {
@@ -138,14 +140,16 @@ func TestServerConfigDownloadAndQuota(t *testing.T) {
 
 	// Supply Snapshot with subscription headers
 	snapMgr.Swap(&generator.Snapshot{
-		Version:         1,
-		SourceUpdatedAt: time.Now(),
-		GeneratedAt:     time.Now(),
-		SHA256:          "sha123",
-		Headers: map[string]string{
-			"Subscription-Userinfo":   "upload=100; download=200; total=1000; expire=1800000000",
-			"Profile-Update-Interval": "24",
-			"Content-Disposition":     "attachment;filename*=UTF-8''TEST",
+		Metadata: generator.Metadata{
+			Version:         1,
+			SourceUpdatedAt: time.Now(),
+			GeneratedAt:     time.Now(),
+			SHA256:          "sha123",
+			Headers: map[string]string{
+				"Subscription-Userinfo":   "upload=100; download=200; total=1000; expire=1800000000",
+				"Profile-Update-Interval": "24",
+				"Content-Disposition":     "attachment;filename*=UTF-8''TEST",
+			},
 		},
 		Content: []byte("mixed-port: 7890\n"),
 	})
@@ -216,11 +220,13 @@ func TestServerUserAgentAndHeaderValidation(t *testing.T) {
 	defer srv.Shutdown(context.Background())
 
 	snapMgr.Swap(&generator.Snapshot{
-		Version:         1,
-		SourceUpdatedAt: time.Now(),
-		GeneratedAt:     time.Now(),
-		SHA256:          "sha123",
-		Content:         []byte("mixed-port: 7890\n"),
+		Metadata: generator.Metadata{
+			Version:         1,
+			SourceUpdatedAt: time.Now(),
+			GeneratedAt:     time.Now(),
+			SHA256:          "sha123",
+		},
+		Content: []byte("mixed-port: 7890\n"),
 	})
 
 	baseURL := "http://" + srv.Addr()
