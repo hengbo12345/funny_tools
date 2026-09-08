@@ -8,9 +8,6 @@ import (
 
 // ApplyProxyGroups applies prepend, append, replace, remove, and inject operations on proxy-groups list.
 func ApplyProxyGroups(groups []map[string]any, ext config.ProxyGroupsExtension) []map[string]any {
-	// Record upstream default (or first) proxy for each upstream group
-	upstreamDefaults := extractGroupDefaultProxies(groups)
-
 	result := make([]map[string]any, 0, len(groups)+len(ext.Prepend)+len(ext.Append))
 
 	// 1. Prepend
@@ -57,10 +54,30 @@ func ApplyProxyGroups(groups []map[string]any, ext config.ProxyGroupsExtension) 
 		}
 	}
 
-	// 5. Ensure upstream default (or first) proxy is preserved as much as possible
-	preserveUpstreamDefaultProxies(result, upstreamDefaults)
+	// 5. Optionally keep the upstream default (first) proxy at index 0.
+	// Replaced groups are skipped: a full replacement is an explicit new ordering.
+	if ext.PreserveUpstreamDefaults() {
+		preserveUpstreamDefaultProxies(result, groups, replaceMap)
+	}
 
 	return result
+}
+
+// proxyListValue normalizes a group's "proxies" value into []any
+// ([]string entries are widened). ok is false when the key is missing,
+// nil, or of an unsupported type.
+func proxyListValue(raw any) (list []any, ok bool) {
+	switch l := raw.(type) {
+	case []any:
+		return l, true
+	case []string:
+		out := make([]any, len(l))
+		for i, s := range l {
+			out[i] = s
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 func applyProxyGroupInject(group map[string]any, injects []config.ProxyGroupInject) {
@@ -70,18 +87,12 @@ func applyProxyGroupInject(group map[string]any, injects []config.ProxyGroupInje
 		return
 	}
 
-	var currentList []any
-	if slice, ok := rawProxies.([]any); ok {
-		currentList = make([]any, len(slice))
-		copy(currentList, slice)
-	} else if strSlice, ok := rawProxies.([]string); ok {
-		currentList = make([]any, len(strSlice))
-		for i, s := range strSlice {
-			currentList[i] = s
-		}
-	} else {
+	src, ok := proxyListValue(rawProxies)
+	if !ok {
 		return
 	}
+	currentList := make([]any, len(src))
+	copy(currentList, src)
 
 	seen := make(map[string]struct{}, len(currentList))
 	for _, p := range currentList {
@@ -119,90 +130,51 @@ func applyProxyGroupInject(group map[string]any, injects []config.ProxyGroupInje
 	group["proxies"] = currentList
 }
 
-func extractGroupDefaultProxies(groups []map[string]any) map[string]string {
-	defaults := make(map[string]string, len(groups))
-	for _, g := range groups {
+// preserveUpstreamDefaultProxies moves each upstream group's original first
+// proxy back to index 0 after mutations. Groups present in skip (replaced
+// groups) are left untouched.
+func preserveUpstreamDefaultProxies(result []map[string]any, upstreamGroups []map[string]any, skip map[string]map[string]any) {
+	defaults := make(map[string]string, len(upstreamGroups))
+	for _, g := range upstreamGroups {
 		name, _ := g["name"].(string)
 		if name == "" {
 			continue
 		}
-		if def, ok := g["default"].(string); ok && strings.TrimSpace(def) != "" {
-			defaults[name] = strings.TrimSpace(def)
+		pList, ok := proxyListValue(g["proxies"])
+		if !ok || len(pList) == 0 {
 			continue
 		}
-		rawProxies, exists := g["proxies"]
-		if !exists || rawProxies == nil {
-			continue
-		}
-		switch pList := rawProxies.(type) {
-		case []any:
-			if len(pList) > 0 {
-				if s, ok := pList[0].(string); ok && strings.TrimSpace(s) != "" {
-					defaults[name] = strings.TrimSpace(s)
-				}
-			}
-		case []string:
-			if len(pList) > 0 && strings.TrimSpace(pList[0]) != "" {
-				defaults[name] = strings.TrimSpace(pList[0])
-			}
+		if s, ok := pList[0].(string); ok && strings.TrimSpace(s) != "" {
+			defaults[name] = strings.TrimSpace(s)
 		}
 	}
-	return defaults
-}
-
-func preserveUpstreamDefaultProxies(groups []map[string]any, upstreamDefaults map[string]string) {
-	if len(upstreamDefaults) == 0 {
+	if len(defaults) == 0 {
 		return
 	}
 
-	for _, g := range groups {
+	for _, g := range result {
 		name, _ := g["name"].(string)
-		origDefault, ok := upstreamDefaults[name]
+		origDefault, ok := defaults[name]
 		if !ok || origDefault == "" {
 			continue
 		}
-
-		rawProxies, exists := g["proxies"]
-		if !exists || rawProxies == nil {
+		if _, replaced := skip[name]; replaced {
 			continue
 		}
 
-		switch pList := rawProxies.(type) {
-		case []any:
-			idx := -1
-			for i, p := range pList {
-				if s, ok := p.(string); ok && s == origDefault {
-					idx = i
-					break
-				}
-			}
-			if idx > 0 {
-				// Move original default proxy back to index 0
-				newList := make([]any, 0, len(pList))
-				newList = append(newList, pList[idx])
-				newList = append(newList, pList[:idx]...)
-				newList = append(newList, pList[idx+1:]...)
-				g["proxies"] = newList
-			}
-		case []string:
-			idx := -1
-			for i, s := range pList {
-				if s == origDefault {
-					idx = i
-					break
-				}
-			}
-			if idx > 0 {
-				newList := make([]string, 0, len(pList))
-				newList = append(newList, pList[idx])
-				newList = append(newList, pList[:idx]...)
-				newList = append(newList, pList[idx+1:]...)
-				g["proxies"] = newList
-			}
+		pList, ok := proxyListValue(g["proxies"])
+		if !ok {
+			continue
 		}
-
-		if def, ok := g["default"].(string); ok && def != "" {
-			g["default"] = origDefault
+		for i, p := range pList {
+			if s, ok := p.(string); ok && s == origDefault && i > 0 {
+				// Move the upstream default proxy back to index 0,
+				// shifting the others right in place (relative order kept).
+				copy(pList[1:i+1], pList[0:i])
+				pList[0] = p
+				g["proxies"] = pList
+				break
+			}
 		}
 	}
 }

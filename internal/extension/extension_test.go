@@ -252,3 +252,59 @@ func TestApplyDNS(t *testing.T) {
 		t.Errorf("expected enhanced-mode fake-ip, got %v", rawDNS.EnhancedMode)
 	}
 }
+
+func TestApplyProxyGroupsPreserveDefaultDisabled(t *testing.T) {
+	groups := []map[string]any{
+		{
+			"name":    "Proxy",
+			"type":    "select",
+			"proxies": []any{"HK-01", "US-01", "DIRECT"},
+		},
+	}
+
+	no := false
+	ext := config.ProxyGroupsExtension{
+		PreserveDefault: &no,
+		Inject: []config.ProxyGroupInject{
+			{
+				Target:         "Proxy",
+				PrependProxies: []string{"AUTO"},
+			},
+		},
+	}
+
+	res := ApplyProxyGroups(groups, ext)
+	proxyList := res[0]["proxies"].([]any)
+	if len(proxyList) < 1 || proxyList[0] != "AUTO" {
+		t.Fatalf("expected prepended AUTO at index 0 when preserve-default is false, got %v", proxyList)
+	}
+}
+
+func TestApplyProxyGroupsReplaceKeepsExplicitOrder(t *testing.T) {
+	groups := []map[string]any{
+		{
+			"name":    "Proxy",
+			"type":    "select",
+			"proxies": []any{"HK-01", "US-01", "DIRECT"},
+		},
+	}
+
+	ext := config.ProxyGroupsExtension{
+		Replace: []config.ProxyGroupReplace{
+			{
+				Match: "Proxy",
+				Value: map[string]any{
+					"name":    "Proxy",
+					"type":    "select",
+					"proxies": []any{"AUTO", "HK-01", "DIRECT"},
+				},
+			},
+		},
+	}
+
+	res := ApplyProxyGroups(groups, ext)
+	proxyList := res[0]["proxies"].([]any)
+	if len(proxyList) < 1 || proxyList[0] != "AUTO" {
+		t.Fatalf("expected replaced group's explicit first proxy AUTO at index 0, got %v", proxyList)
+	}
+}

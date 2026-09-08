@@ -53,6 +53,15 @@ type ProxyGroupsExtension struct {
 	Replace []ProxyGroupReplace `yaml:"replace"`
 	Remove  []string            `yaml:"remove"`
 	Inject  []ProxyGroupInject  `yaml:"inject"`
+	// PreserveDefault keeps the upstream group's default (first) proxy at index 0
+	// after prepend/inject operations. Defaults to true.
+	PreserveDefault *bool `yaml:"preserve-default,omitempty"`
+}
+
+// PreserveUpstreamDefaults reports whether upstream default-proxy preservation
+// is enabled. Defaults to true when PreserveDefault is unset.
+func (e ProxyGroupsExtension) PreserveUpstreamDefaults() bool {
+	return e.PreserveDefault == nil || *e.PreserveDefault
 }
 
 // ProxyGroupInject defines injection of proxy names into existing proxy-groups.
