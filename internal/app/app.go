@@ -48,6 +48,8 @@ func (a *App) Run() error {
 	logger.Info("starting mihomo subscription publisher",
 		"generator_version", generator.GeneratorVersion,
 		"mihomo_version", generator.MihomoVersion,
+		"git_commit", generator.GitCommit,
+		"build_date", generator.BuildDate,
 	)
 
 	// 1. Load and validate main configuration

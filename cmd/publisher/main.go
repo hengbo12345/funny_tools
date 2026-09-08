@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 
@@ -11,27 +12,52 @@ import (
 	"mihomo-sub-publisher/internal/logging"
 )
 
-func main() {
-	var (
-		configPath  = flag.String("config", "configs/config.yaml", "Path to config.yaml")
-		tokensPath  = flag.String("tokens", "configs/tokens.yaml", "Path to tokens.yaml")
-		showVersion = flag.Bool("version", false, "Show version information")
-		logJSON     = flag.Bool("json-log", true, "Output logs in JSON format")
-	)
-	flag.Parse()
+var (
+	// GitCommit can be set during build with -ldflags "-X main.GitCommit=..."
+	GitCommit string
+	// BuildDate can be set during build with -ldflags "-X main.BuildDate=..."
+	BuildDate string
+)
 
-	if *showVersion {
-		fmt.Printf("Mihomo Subscription Publisher\n")
-		fmt.Printf("Generator Version: %s\n", generator.GeneratorVersion)
-		fmt.Printf("Mihomo Version:    %s\n", generator.MihomoVersion)
-		os.Exit(0)
+func run(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("publisher", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+
+	var (
+		configPath  = flags.String("config", "configs/config.yaml", "Path to config.yaml")
+		tokensPath  = flags.String("tokens", "configs/tokens.yaml", "Path to tokens.yaml")
+		logJSON     = flags.Bool("json-log", true, "Output logs in JSON format")
+		showVersion bool
+	)
+	flags.BoolVar(&showVersion, "v", false, "Show version information")
+	flags.BoolVar(&showVersion, "version", false, "Show version information")
+
+	if err := flags.Parse(args); err != nil {
+		return 2
 	}
 
-	logger := logging.Init(os.Stderr, slog.LevelInfo, *logJSON)
+	if GitCommit != "" {
+		generator.GitCommit = GitCommit
+	}
+	if BuildDate != "" {
+		generator.BuildDate = BuildDate
+	}
+
+	if showVersion {
+		fmt.Fprint(stdout, generator.VersionString())
+		return 0
+	}
+
+	logger := logging.Init(stderr, slog.LevelInfo, *logJSON)
 
 	application := app.NewApp(*configPath, *tokensPath)
 	if err := application.Run(); err != nil {
 		logger.Error("application fatal error", "error", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
+}
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }

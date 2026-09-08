@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -17,7 +18,44 @@ var (
 	GeneratorVersion = "1.1.0"
 	// MihomoVersion records the Mihomo library version
 	MihomoVersion = "1.19.30"
+	// GitCommit can be set during build with -ldflags "-X mihomo-sub-publisher/internal/generator.GitCommit=..."
+	GitCommit = "unknown"
+	// BuildDate can be set during build with -ldflags "-X mihomo-sub-publisher/internal/generator.BuildDate=..."
+	BuildDate = "unknown"
 )
+
+func init() {
+	initBuildInfo()
+}
+
+func initBuildInfo() {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			if GitCommit == "unknown" || GitCommit == "" {
+				GitCommit = s.Value
+			}
+		case "vcs.time":
+			if BuildDate == "unknown" || BuildDate == "" {
+				BuildDate = s.Value
+			}
+		}
+	}
+}
+
+// VersionString returns formatted version information.
+func VersionString() string {
+	return fmt.Sprintf("Mihomo Subscription Publisher\nGenerator Version: %s\nMihomo Version:    %s\nGit Commit:        %s\nBuild Date:        %s\n",
+		GeneratorVersion,
+		MihomoVersion,
+		GitCommit,
+		BuildDate,
+	)
+}
 
 // Metadata represents generated.yaml.meta.json on disk.
 type Metadata struct {

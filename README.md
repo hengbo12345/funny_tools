@@ -63,6 +63,10 @@ mihomo-sub-publisher/
 ### 1. 编译二进制
 
 ```bash
+# 编译二进制（注入版本号、Git Commit ID 与构建时间）
+go build -ldflags="-s -w -X mihomo-sub-publisher/internal/generator.GeneratorVersion=1.1.0 -X mihomo-sub-publisher/internal/generator.GitCommit=$(git rev-parse HEAD) -X mihomo-sub-publisher/internal/generator.BuildDate=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" -o bin/publisher ./cmd/publisher
+
+# 或基础编译（Go 1.18+ 会自动从 VCS 内嵌 Git Commit 与时间）
 go build -o bin/publisher ./cmd/publisher
 ```
 
@@ -83,14 +87,20 @@ cp configs/tokens.yaml configs/tokens.yaml
 - `-config`: 主配置文件路径（默认 `configs/config.yaml`）
 - `-tokens`: Token 配置文件路径（默认 `configs/tokens.yaml`）
 - `-json-log`: 是否输出 JSON 格式日志（默认 `true`）
-- `-version`: 显示程序版本信息
+- `-v`, `-version`: 显示程序版本信息（包含 Generator 版本、Mihomo 版本、Git Commit 与 Build Date）
 
 ### 3. Docker 与 Docker Compose 部署
 
 #### 方式一：Docker 单容器运行
 ```bash
-# 构建镜像
+# 构建镜像（Dockerfile 内置自动提取 Git Commit 与构建时间）
 docker build -t mihomo-sub-publisher:latest .
+
+# 或通过 build-arg 显式指定 Commit 与构建时间
+docker build \
+  --build-arg GIT_COMMIT=$(git rev-parse HEAD) \
+  --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+  -t mihomo-sub-publisher:latest .
 
 # 运行容器
 docker run -d \
