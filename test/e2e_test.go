@@ -58,6 +58,9 @@ rules:
 			return
 		}
 		w.Header().Set("Content-Type", "application/yaml")
+		w.Header().Set("Subscription-Userinfo", "upload=526559161; download=10697466941; total=214748364800; expire=1813969467")
+		w.Header().Set("Profile-Update-Interval", "24")
+		w.Header().Set("Content-Disposition", "attachment;filename*=UTF-8''FLZT")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(upstreamYAML))
 	}))
@@ -102,6 +105,12 @@ tokens:
 						"type":    "url-test",
 						"proxies": []any{"HK-Node-01", "DIRECT-LOCAL"},
 						"url":     "http://example.com/generate_204",
+					},
+				},
+				Inject: []config.ProxyGroupInject{
+					{
+						Target:         "Proxy",
+						PrependProxies: []string{"AUTO-HK"},
 					},
 				},
 			},
@@ -184,18 +193,39 @@ tokens:
 
 	baseURL := "http://" + srv.Addr()
 
-	// 5. Test GET /health
+	// 5. Test GET /health (Health endpoints do not require Clash UA)
 	resp, err := http.Get(baseURL + "/health")
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /health failed: code=%v, err=%v", resp.StatusCode, err)
 	}
 	resp.Body.Close()
 
-	// 6. Test GET /config/alice-secret-token (Download #1)
-	resp, err = http.Get(baseURL + "/config/alice-secret-token")
+	clashUA := "clash.meta"
+
+	// 5.1 Test that non-clash User-Agent receives 404 Not Found
+	nonClashResp, err := http.Get(baseURL + "/config/alice-secret-token")
+	if err != nil || nonClashResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for non-clash UA, got code=%v, err=%v", nonClashResp.StatusCode, err)
+	}
+	nonClashResp.Body.Close()
+
+	// 6. Test GET /config/alice-secret-token (Download #1 with Clash UA)
+	resp, err = getWithUA(baseURL+"/config/alice-secret-token", clashUA)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /config/alice failed: code=%v, err=%v", resp.StatusCode, err)
 	}
+
+	// Verify upstream subscription headers forwarded to downstream
+	if uinfo := resp.Header.Get("Subscription-Userinfo"); uinfo != "upload=526559161; download=10697466941; total=214748364800; expire=1813969467" {
+		t.Errorf("expected Subscription-Userinfo header, got %q", uinfo)
+	}
+	if interval := resp.Header.Get("Profile-Update-Interval"); interval != "24" {
+		t.Errorf("expected Profile-Update-Interval 24, got %q", interval)
+	}
+	if disp := resp.Header.Get("Content-Disposition"); disp != "attachment;filename*=UTF-8''FLZT" {
+		t.Errorf("expected Content-Disposition header, got %q", disp)
+	}
+
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
@@ -219,15 +249,37 @@ tokens:
 		t.Fatalf("failed to parse generated config as YAML: %v", err)
 	}
 
+	// Verify upstream default/first proxy was preserved for group "Proxy"
+	if pGroups, ok := parsedFinal["proxy-groups"].([]any); ok {
+		var foundProxyGroup bool
+		for _, gAny := range pGroups {
+			if gMap, ok := gAny.(map[string]any); ok && gMap["name"] == "Proxy" {
+				foundProxyGroup = true
+				if proxies, ok := gMap["proxies"].([]any); ok {
+					if len(proxies) == 0 || proxies[0] != "HK-Node-01" {
+						t.Errorf("expected group 'Proxy' default/first proxy to remain 'HK-Node-01', got %v", proxies)
+					}
+				} else {
+					t.Errorf("group 'Proxy' missing proxies list")
+				}
+			}
+		}
+		if !foundProxyGroup {
+			t.Errorf("group 'Proxy' not found in final config")
+		}
+	} else {
+		t.Errorf("missing proxy-groups in final config")
+	}
+
 	// 7. Test Download #2 (Reaches limit of 2)
-	resp, err = http.Get(baseURL + "/config/alice-secret-token")
+	resp, err = getWithUA(baseURL+"/config/alice-secret-token", clashUA)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /config/alice (download 2) failed: code=%v, err=%v", resp.StatusCode, err)
 	}
 	resp.Body.Close()
 
 	// 8. Test Download #3 (Exhausted -> 403)
-	resp, err = http.Get(baseURL + "/config/alice-secret-token")
+	resp, err = getWithUA(baseURL+"/config/alice-secret-token", clashUA)
 	if err != nil {
 		t.Fatalf("GET /config/alice failed: %v", err)
 	}
@@ -256,7 +308,7 @@ tokens:
 	}
 
 	// Download #4 should now succeed (200 OK)
-	resp, err = http.Get(baseURL + "/config/alice-secret-token")
+	resp, err = getWithUA(baseURL+"/config/alice-secret-token", clashUA)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /config/alice after reset failed: code=%v, err=%v", resp.StatusCode, err)
 	}
@@ -272,7 +324,7 @@ tokens:
 	}
 
 	// Last-known-good snapshot must continue to be served!
-	resp, err = http.Get(baseURL + "/config/alice-secret-token")
+	resp, err = getWithUA(baseURL+"/config/alice-secret-token", clashUA)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /config/alice should succeed with last-known-good snapshot during upstream failure: code=%v, err=%v", resp.StatusCode, err)
 	}
@@ -292,4 +344,15 @@ func init() {
 	// Ensure generator hash function handles nil and valid cases
 	_ = hex.EncodeToString
 	_ = sha256.Sum256
+}
+
+func getWithUA(url, ua string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
+	return http.DefaultClient.Do(req)
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -175,6 +176,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	// Validate headers: only clash-like User-Agents and expected headers are accepted.
+	// Unexpected headers return 404 Not Found.
+	if !s.isExpectedRequest(r) {
+		s.writeJSONError(w, http.StatusNotFound, "not_found")
+		return
+	}
+
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		s.writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
@@ -222,6 +230,12 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Source-Updated-At", snap.SourceUpdatedAt.UTC().Format(time.RFC3339))
 	w.Header().Set("X-Generated-At", snap.GeneratedAt.UTC().Format(time.RFC3339))
 	w.Header().Set("X-Config-SHA256", snap.SHA256)
+
+	// Forward saved upstream subscription headers (subscription-userinfo, profile-update-interval, content-disposition, etc.)
+	for k, v := range snap.Headers {
+		w.Header().Set(k, v)
+	}
+
 	w.WriteHeader(http.StatusOK)
 
 	// 4. Write Body
@@ -233,6 +247,62 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			logger.Info("token.download.success", "token_name", tokenItem.Definition.Name, "remaining", tokenItem.Remaining.Load())
 		}
 	}
+}
+
+func (s *Server) isExpectedRequest(r *http.Request) bool {
+	// 1. User-Agent check (must be a Clash-compatible client)
+	ua := strings.TrimSpace(r.Header.Get("User-Agent"))
+	if ua == "" {
+		return false
+	}
+	lowerUA := strings.ToLower(ua)
+
+	uaMatched := false
+	if len(s.cfg.Server.AllowedUserAgents) > 0 {
+		for _, pattern := range s.cfg.Server.AllowedUserAgents {
+			lowerPat := strings.ToLower(strings.TrimSpace(pattern))
+			if lowerPat == "*" {
+				uaMatched = true
+				break
+			}
+			if strings.HasPrefix(lowerPat, "*") && strings.HasSuffix(lowerPat, "*") && len(lowerPat) > 2 {
+				sub := lowerPat[1 : len(lowerPat)-1]
+				if strings.Contains(lowerUA, sub) {
+					uaMatched = true
+					break
+				}
+			} else if matched, _ := filepath.Match(lowerPat, lowerUA); matched {
+				uaMatched = true
+				break
+			} else if strings.Contains(lowerUA, lowerPat) {
+				uaMatched = true
+				break
+			}
+		}
+	} else {
+		uaMatched = strings.Contains(lowerUA, "clash") ||
+			strings.Contains(lowerUA, "mihomo") ||
+			strings.Contains(lowerUA, "stash")
+	}
+
+	if !uaMatched {
+		return false
+	}
+
+	// 2. Required headers check (if configured)
+	for reqKey, reqVal := range s.cfg.Server.RequiredHeaders {
+		actualVal := r.Header.Get(reqKey)
+		if actualVal == "" {
+			return false
+		}
+		if reqVal != "" && reqVal != "*" {
+			if !strings.EqualFold(actualVal, reqVal) {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func (s *Server) writeJSONError(w http.ResponseWriter, code int, errCode string) {

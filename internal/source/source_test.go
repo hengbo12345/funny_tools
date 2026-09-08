@@ -114,3 +114,43 @@ func TestFetcherRetryOn5xx(t *testing.T) {
 		t.Fatalf("expected 3 attempts, got %d", attempts.Load())
 	}
 }
+
+func TestFetcherDefaultClashUAAndSubscriptionHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("User-Agent") != "clash.meta" {
+			t.Errorf("expected default User-Agent clash.meta, got %s", r.Header.Get("User-Agent"))
+		}
+		w.Header().Set("Content-Type", "text/yaml; charset=UTF-8")
+		w.Header().Set("Subscription-Userinfo", "upload=526559161; download=10697466941; total=214748364800; expire=1813969467")
+		w.Header().Set("Profile-Update-Interval", "24")
+		w.Header().Set("Content-Disposition", "attachment;filename*=UTF-8''FLZT")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("mixed-port: 7890\nproxies: []\n"))
+	}))
+	defer server.Close()
+
+	// No User-Agent header specified in cfg
+	cfg := config.SourceConfig{
+		URL:     server.URL,
+		Timeout: 2 * time.Second,
+	}
+
+	fetcher := NewFetcher(cfg)
+	res, err := fetcher.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("Fetch failed: %v", err)
+	}
+
+	if res.Headers == nil {
+		t.Fatalf("expected non-nil res.Headers")
+	}
+	if userInfo := res.Headers["Subscription-Userinfo"]; userInfo != "upload=526559161; download=10697466941; total=214748364800; expire=1813969467" {
+		t.Errorf("unexpected Subscription-Userinfo: %s", userInfo)
+	}
+	if interval := res.Headers["Profile-Update-Interval"]; interval != "24" {
+		t.Errorf("unexpected Profile-Update-Interval: %s", interval)
+	}
+	if disp := res.Headers["Content-Disposition"]; disp != "attachment;filename*=UTF-8''FLZT" {
+		t.Errorf("unexpected Content-Disposition: %s", disp)
+	}
+}

@@ -1,11 +1,16 @@
 package extension
 
 import (
+	"strings"
+
 	"mihomo-sub-publisher/internal/config"
 )
 
 // ApplyProxyGroups applies prepend, append, replace, remove, and inject operations on proxy-groups list.
 func ApplyProxyGroups(groups []map[string]any, ext config.ProxyGroupsExtension) []map[string]any {
+	// Record upstream default (or first) proxy for each upstream group
+	upstreamDefaults := extractGroupDefaultProxies(groups)
+
 	result := make([]map[string]any, 0, len(groups)+len(ext.Prepend)+len(ext.Append))
 
 	// 1. Prepend
@@ -51,6 +56,9 @@ func ApplyProxyGroups(groups []map[string]any, ext config.ProxyGroupsExtension) 
 			applyProxyGroupInject(g, ext.Inject)
 		}
 	}
+
+	// 5. Ensure upstream default (or first) proxy is preserved as much as possible
+	preserveUpstreamDefaultProxies(result, upstreamDefaults)
 
 	return result
 }
@@ -109,4 +117,92 @@ func applyProxyGroupInject(group map[string]any, injects []config.ProxyGroupInje
 	}
 
 	group["proxies"] = currentList
+}
+
+func extractGroupDefaultProxies(groups []map[string]any) map[string]string {
+	defaults := make(map[string]string, len(groups))
+	for _, g := range groups {
+		name, _ := g["name"].(string)
+		if name == "" {
+			continue
+		}
+		if def, ok := g["default"].(string); ok && strings.TrimSpace(def) != "" {
+			defaults[name] = strings.TrimSpace(def)
+			continue
+		}
+		rawProxies, exists := g["proxies"]
+		if !exists || rawProxies == nil {
+			continue
+		}
+		switch pList := rawProxies.(type) {
+		case []any:
+			if len(pList) > 0 {
+				if s, ok := pList[0].(string); ok && strings.TrimSpace(s) != "" {
+					defaults[name] = strings.TrimSpace(s)
+				}
+			}
+		case []string:
+			if len(pList) > 0 && strings.TrimSpace(pList[0]) != "" {
+				defaults[name] = strings.TrimSpace(pList[0])
+			}
+		}
+	}
+	return defaults
+}
+
+func preserveUpstreamDefaultProxies(groups []map[string]any, upstreamDefaults map[string]string) {
+	if len(upstreamDefaults) == 0 {
+		return
+	}
+
+	for _, g := range groups {
+		name, _ := g["name"].(string)
+		origDefault, ok := upstreamDefaults[name]
+		if !ok || origDefault == "" {
+			continue
+		}
+
+		rawProxies, exists := g["proxies"]
+		if !exists || rawProxies == nil {
+			continue
+		}
+
+		switch pList := rawProxies.(type) {
+		case []any:
+			idx := -1
+			for i, p := range pList {
+				if s, ok := p.(string); ok && s == origDefault {
+					idx = i
+					break
+				}
+			}
+			if idx > 0 {
+				// Move original default proxy back to index 0
+				newList := make([]any, 0, len(pList))
+				newList = append(newList, pList[idx])
+				newList = append(newList, pList[:idx]...)
+				newList = append(newList, pList[idx+1:]...)
+				g["proxies"] = newList
+			}
+		case []string:
+			idx := -1
+			for i, s := range pList {
+				if s == origDefault {
+					idx = i
+					break
+				}
+			}
+			if idx > 0 {
+				newList := make([]string, 0, len(pList))
+				newList = append(newList, pList[idx])
+				newList = append(newList, pList[:idx]...)
+				newList = append(newList, pList[idx+1:]...)
+				g["proxies"] = newList
+			}
+		}
+
+		if def, ok := g["default"].(string); ok && def != "" {
+			g["default"] = origDefault
+		}
+	}
 }

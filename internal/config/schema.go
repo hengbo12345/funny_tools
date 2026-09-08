@@ -106,9 +106,11 @@ type ProviderConfig struct {
 
 // ServerConfig defines the HTTP server settings.
 type ServerConfig struct {
-	Listen          string        `yaml:"listen"`
-	ConfigPath      string        `yaml:"config-path"`
-	ShutdownTimeout time.Duration `yaml:"shutdown-timeout"`
+	Listen            string            `yaml:"listen"`
+	ConfigPath        string            `yaml:"config-path"`
+	ShutdownTimeout   time.Duration     `yaml:"shutdown-timeout"`
+	AllowedUserAgents []string          `yaml:"allowed-user-agents,omitempty"`
+	RequiredHeaders   map[string]string `yaml:"required-headers,omitempty"`
 }
 
 // StorageConfig defines data and cache directory paths.

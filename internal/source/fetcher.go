@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"mihomo-sub-publisher/internal/config"
@@ -19,6 +20,7 @@ type FetchResult struct {
 	Content   []byte
 	SHA256    string
 	UpdatedAt time.Time
+	Headers   map[string]string
 }
 
 // Fetcher handles downloading upstream subscription configuration with retries.
@@ -88,8 +90,18 @@ func (f *Fetcher) doFetch(ctx context.Context) (*FetchResult, error) {
 
 	// Apply headers
 	req.Header.Set("Accept-Encoding", "gzip")
+	hasUA := false
 	for k, v := range f.cfg.Headers {
 		req.Header.Set(k, v)
+		if strings.EqualFold(k, "User-Agent") && strings.TrimSpace(v) != "" {
+			hasUA = true
+		}
+	}
+
+	// Default to a Clash-compatible User-Agent if none set or if default placeholder
+	currentUA := req.Header.Get("User-Agent")
+	if !hasUA || currentUA == "" || currentUA == "mihomo-sub-publisher/1.0" {
+		req.Header.Set("User-Agent", "clash.meta")
 	}
 
 	resp, err := f.client.Do(req)
@@ -121,6 +133,25 @@ func (f *Fetcher) doFetch(ctx context.Context) (*FetchResult, error) {
 		return nil, fmt.Errorf("empty subscription response body")
 	}
 
+	// Extract subscription metadata headers (subscription-userinfo, profile-update-interval, content-disposition, etc.)
+	headers := make(map[string]string)
+	for k, values := range resp.Header {
+		if len(values) == 0 {
+			continue
+		}
+		lower := strings.ToLower(k)
+		if lower == "subscription-userinfo" ||
+			lower == "profile-update-interval" ||
+			lower == "content-disposition" ||
+			lower == "profile-title" ||
+			lower == "profile-web-page-url" ||
+			lower == "support-url" ||
+			strings.HasPrefix(lower, "subscription-") ||
+			strings.HasPrefix(lower, "profile-") {
+			headers[http.CanonicalHeaderKey(k)] = values[0]
+		}
+	}
+
 	hash := sha256.Sum256(content)
 	shaStr := hex.EncodeToString(hash[:])
 
@@ -128,5 +159,6 @@ func (f *Fetcher) doFetch(ctx context.Context) (*FetchResult, error) {
 		Content:   content,
 		SHA256:    shaStr,
 		UpdatedAt: time.Now(),
+		Headers:   headers,
 	}, nil
 }

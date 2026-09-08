@@ -16,7 +16,7 @@ func DefaultConfig() Config {
 			Interval: 1 * time.Hour,
 			Timeout:  30 * time.Second,
 			Headers: map[string]string{
-				"User-Agent": "mihomo-sub-publisher/1.0",
+				"User-Agent": "clash.meta",
 			},
 		},
 		Server: ServerConfig{

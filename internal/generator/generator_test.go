@@ -82,6 +82,10 @@ rules:
 		Content:   []byte(sourceContent),
 		SHA256:    "dummy-sha-12345",
 		UpdatedAt: time.Now(),
+		Headers: map[string]string{
+			"Subscription-Userinfo":   "upload=1; download=2; total=10; expire=1800000000",
+			"Profile-Update-Interval": "24",
+		},
 	}
 
 	registry := ruleproviders.NewDefaultRegistry()
@@ -99,6 +103,9 @@ rules:
 	if snap.Version != 1 {
 		t.Errorf("expected version 1, got %d", snap.Version)
 	}
+	if snap.Headers["Subscription-Userinfo"] != "upload=1; download=2; total=10; expire=1800000000" {
+		t.Errorf("expected subscription userinfo in snapshot, got %v", snap.Headers)
+	}
 
 	// Verify disk cache
 	genFile := filepath.Join(cacheDir, "generated.yaml")
@@ -115,13 +122,34 @@ rules:
 		t.Errorf("expected skipped generation version %d, got %d", snap.Version, snap2.Version)
 	}
 
+	// 2.1 Third Run with same content hash but updated headers should update headers
+	fetchResUpdatedHeaders := &source.FetchResult{
+		Content:   []byte(sourceContent),
+		SHA256:    "dummy-sha-12345",
+		UpdatedAt: time.Now(),
+		Headers: map[string]string{
+			"Subscription-Userinfo":   "upload=100; download=200; total=1000; expire=1800000000",
+			"Profile-Update-Interval": "12",
+		},
+	}
+	snap3, err := pipeline.Run(context.Background(), fetchResUpdatedHeaders)
+	if err != nil {
+		t.Fatalf("Pipeline.Run (header update) failed: %v", err)
+	}
+	if snap3.Headers["Subscription-Userinfo"] != "upload=100; download=200; total=1000; expire=1800000000" {
+		t.Errorf("expected updated headers in snapshot, got %v", snap3.Headers)
+	}
+
 	// 3. Restore Snapshot from disk in a fresh manager
 	freshMgr := NewSnapshotManager()
 	restoredSnap, err := freshMgr.Restore(cacheDir)
 	if err != nil {
 		t.Fatalf("Restore failed: %v", err)
 	}
-	if restoredSnap.Version != snap.Version {
-		t.Errorf("restored version %d != original %d", restoredSnap.Version, snap.Version)
+	if restoredSnap.Version != snap3.Version {
+		t.Errorf("restored version %d != original %d", restoredSnap.Version, snap3.Version)
+	}
+	if restoredSnap.Headers["Subscription-Userinfo"] != "upload=100; download=200; total=1000; expire=1800000000" {
+		t.Errorf("restored headers missing or incorrect: %v", restoredSnap.Headers)
 	}
 }

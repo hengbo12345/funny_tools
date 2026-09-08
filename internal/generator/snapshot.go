@@ -70,6 +70,7 @@ func (m *SnapshotManager) Restore(cacheDir string) (*Snapshot, error) {
 		SHA256:          shaStr,
 		SourceSHA256:    meta.SourceSHA256,
 		Fingerprint:     meta.Fingerprint,
+		Headers:         meta.Headers,
 		Content:         content,
 	}
 

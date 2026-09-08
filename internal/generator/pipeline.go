@@ -77,6 +77,27 @@ func (p *Pipeline) Run(ctx context.Context, inputResult *source.FetchResult) (*S
 	currentSnap := p.snapshotMgr.Get()
 	if currentSnap != nil && currentSnap.Fingerprint == fingerprint {
 		logger.Info("generation skipped: fingerprint unchanged", "fingerprint", fingerprint)
+		if !headersEqual(currentSnap.Headers, fetchRes.Headers) {
+			updatedSnap := *currentSnap
+			updatedSnap.Headers = fetchRes.Headers
+			updatedSnap.SourceUpdatedAt = fetchRes.UpdatedAt
+			p.snapshotMgr.Swap(&updatedSnap)
+
+			cacheDir := p.cfg.Storage.CacheDir
+			meta := Metadata{
+				Version:         updatedSnap.Version,
+				Fingerprint:     updatedSnap.Fingerprint,
+				SourceSHA256:    updatedSnap.SourceSHA256,
+				SHA256:          updatedSnap.SHA256,
+				GeneratedAt:     updatedSnap.GeneratedAt,
+				SourceUpdatedAt: updatedSnap.SourceUpdatedAt,
+				Headers:         updatedSnap.Headers,
+			}
+			if metaJSON, err := meta.ToJSON(); err == nil {
+				_ = storage.AtomicWriteFile(filepath.Join(cacheDir, "generated.yaml.meta.json"), metaJSON, storage.DefaultFilePerm)
+			}
+			return &updatedSnap, nil
+		}
 		return currentSnap, nil
 	}
 
@@ -177,6 +198,7 @@ func (p *Pipeline) Run(ctx context.Context, inputResult *source.FetchResult) (*S
 		SHA256:          finalSHAStr,
 		SourceSHA256:    fetchRes.SHA256,
 		Fingerprint:     fingerprint,
+		Headers:         fetchRes.Headers,
 		Content:         finalYAML,
 	}
 
@@ -195,6 +217,7 @@ func (p *Pipeline) Run(ctx context.Context, inputResult *source.FetchResult) (*S
 			SHA256:          newSnap.SHA256,
 			GeneratedAt:     newSnap.GeneratedAt,
 			SourceUpdatedAt: newSnap.SourceUpdatedAt,
+			Headers:         newSnap.Headers,
 		}
 		if metaJSON, err := meta.ToJSON(); err == nil {
 			_ = storage.AtomicWriteFile(filepath.Join(cacheDir, "generated.yaml.meta.json"), metaJSON, storage.DefaultFilePerm)
@@ -205,4 +228,16 @@ func (p *Pipeline) Run(ctx context.Context, inputResult *source.FetchResult) (*S
 	p.snapshotMgr.Swap(newSnap)
 	logger.Info("generation.success", "version", newSnap.Version, "sha256", newSnap.SHA256)
 	return newSnap, nil
+}
+
+func headersEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }

@@ -108,14 +108,26 @@ func TestServerHealthAndStatus(t *testing.T) {
 	}
 }
 
+func getWithUA(url, ua string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
+	return http.DefaultClient.Do(req)
+}
+
 func TestServerConfigDownloadAndQuota(t *testing.T) {
 	srv, tokenStore, snapMgr := setupTestServer(t)
 	defer srv.Shutdown(context.Background())
 
 	baseURL := "http://" + srv.Addr()
+	clashUA := "clash.meta"
 
 	// 1. No snapshot available -> 503
-	resp, err := http.Get(baseURL + "/config/token-valid")
+	resp, err := getWithUA(baseURL+"/config/token-valid", clashUA)
 	if err != nil {
 		t.Fatalf("GET /config/token-valid failed: %v", err)
 	}
@@ -124,20 +136,25 @@ func TestServerConfigDownloadAndQuota(t *testing.T) {
 		t.Errorf("expected 503, got %d", resp.StatusCode)
 	}
 
-	// Supply Snapshot
+	// Supply Snapshot with subscription headers
 	snapMgr.Swap(&generator.Snapshot{
 		Version:         1,
 		SourceUpdatedAt: time.Now(),
 		GeneratedAt:     time.Now(),
 		SHA256:          "sha123",
-		Content:         []byte("mixed-port: 7890\n"),
+		Headers: map[string]string{
+			"Subscription-Userinfo":   "upload=100; download=200; total=1000; expire=1800000000",
+			"Profile-Update-Interval": "24",
+			"Content-Disposition":     "attachment;filename*=UTF-8''TEST",
+		},
+		Content: []byte("mixed-port: 7890\n"),
 	})
 
 	// 2. Valid token -> 200 OK and quota -1
 	item, _ := tokenStore.Authorize("token-valid")
 	initialRemaining := item.Remaining.Load()
 
-	resp, err = http.Get(baseURL + "/config/token-valid")
+	resp, err = getWithUA(baseURL+"/config/token-valid", clashUA)
 	if err != nil {
 		t.Fatalf("GET /config/token-valid failed: %v", err)
 	}
@@ -148,6 +165,15 @@ func TestServerConfigDownloadAndQuota(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); ct != "application/yaml" {
 		t.Errorf("expected application/yaml, got %s", ct)
 	}
+	if ui := resp.Header.Get("Subscription-Userinfo"); ui != "upload=100; download=200; total=1000; expire=1800000000" {
+		t.Errorf("expected Subscription-Userinfo header, got %s", ui)
+	}
+	if interval := resp.Header.Get("Profile-Update-Interval"); interval != "24" {
+		t.Errorf("expected Profile-Update-Interval 24, got %s", interval)
+	}
+	if disp := resp.Header.Get("Content-Disposition"); disp != "attachment;filename*=UTF-8''TEST" {
+		t.Errorf("expected Content-Disposition header, got %s", disp)
+	}
 
 	newRemaining := item.Remaining.Load()
 	if newRemaining != initialRemaining-1 {
@@ -155,7 +181,7 @@ func TestServerConfigDownloadAndQuota(t *testing.T) {
 	}
 
 	// 3. Non-existent token -> 404
-	resp, err = http.Get(baseURL + "/config/non-existent-token")
+	resp, err = getWithUA(baseURL+"/config/non-existent-token", clashUA)
 	if err != nil {
 		t.Fatalf("GET /config/non-existent failed: %v", err)
 	}
@@ -165,7 +191,7 @@ func TestServerConfigDownloadAndQuota(t *testing.T) {
 	}
 
 	// 4. Exhausted token -> 403
-	resp, err = http.Get(baseURL + "/config/token-exhausted")
+	resp, err = getWithUA(baseURL+"/config/token-exhausted", clashUA)
 	if err != nil {
 		t.Fatalf("GET /config/token-exhausted failed: %v", err)
 	}
@@ -175,12 +201,72 @@ func TestServerConfigDownloadAndQuota(t *testing.T) {
 	}
 
 	// 5. Expired token -> 403
-	resp, err = http.Get(baseURL + "/config/token-expired")
+	resp, err = getWithUA(baseURL+"/config/token-expired", clashUA)
 	if err != nil {
 		t.Fatalf("GET /config/token-expired failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestServerUserAgentAndHeaderValidation(t *testing.T) {
+	srv, tokenStore, snapMgr := setupTestServer(t)
+	defer srv.Shutdown(context.Background())
+
+	snapMgr.Swap(&generator.Snapshot{
+		Version:         1,
+		SourceUpdatedAt: time.Now(),
+		GeneratedAt:     time.Now(),
+		SHA256:          "sha123",
+		Content:         []byte("mixed-port: 7890\n"),
+	})
+
+	baseURL := "http://" + srv.Addr()
+
+	// 1. Non-clash User-Agents should return 404 Not Found
+	nonClashUAs := []string{
+		"",
+		"curl/7.88.1",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+		"python-requests/2.31.0",
+		"Wget/1.21.4",
+		"Go-http-client/1.1",
+	}
+
+	for _, ua := range nonClashUAs {
+		resp, err := getWithUA(baseURL+"/config/token-valid", ua)
+		if err != nil {
+			t.Fatalf("request failed for UA %q: %v", ua, err)
+		}
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("UA %q expected 404 Not Found, got %d", ua, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+
+	// 2. Clash-compatible User-Agents should succeed (200 OK)
+	item, _ := tokenStore.Authorize("token-valid")
+	item.Remaining.Store(100)
+
+	clashUAs := []string{
+		"clash.meta",
+		"ClashforWindows/0.20.39",
+		"clash-verge/v1.7.7",
+		"ClashX/1.118.0",
+		"Mihomo/1.19.0",
+		"Stash/2.6.0",
+	}
+
+	for _, ua := range clashUAs {
+		resp, err := getWithUA(baseURL+"/config/token-valid", ua)
+		if err != nil {
+			t.Fatalf("request failed for UA %q: %v", ua, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("UA %q expected 200 OK, got %d", ua, resp.StatusCode)
+		}
+		resp.Body.Close()
 	}
 }

@@ -5,7 +5,7 @@ source:
   interval: 1h
   timeout: 30s
   headers:
-    User-Agent: "mihomo-sub-publisher/1.0"
+    User-Agent: "clash.meta"
 
 extensions:
   proxies:

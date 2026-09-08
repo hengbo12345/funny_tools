@@ -80,9 +80,9 @@ func TestApplyProxyGroupsInjection(t *testing.T) {
 		t.Fatalf("expected 2 groups, got %d", len(res))
 	}
 
-	// Group "Proxy" should have node-a, node-b prepended
+	// Group "Proxy" has upstream default "AUTO", which is preserved at index 0
 	proxyList := res[0]["proxies"].([]any)
-	expectedProxy := []string{"node-a", "node-b", "AUTO", "DIRECT"}
+	expectedProxy := []string{"AUTO", "node-a", "node-b", "DIRECT"}
 	if len(proxyList) != len(expectedProxy) {
 		t.Fatalf("expected %d proxies in Proxy group, got %d: %v", len(expectedProxy), len(proxyList), proxyList)
 	}
@@ -92,9 +92,9 @@ func TestApplyProxyGroupsInjection(t *testing.T) {
 		}
 	}
 
-	// Group "GPT" should have node-a, node-b prepended and node-c appended
+	// Group "GPT" has upstream default "Proxy", which is preserved at index 0
 	gptList := res[1]["proxies"].([]any)
-	expectedGPT := []string{"node-a", "node-b", "Proxy", "DIRECT", "node-c"}
+	expectedGPT := []string{"Proxy", "node-a", "node-b", "DIRECT", "node-c"}
 	if len(gptList) != len(expectedGPT) {
 		t.Fatalf("expected %d proxies in GPT group, got %d: %v", len(expectedGPT), len(gptList), gptList)
 	}
@@ -102,6 +102,48 @@ func TestApplyProxyGroupsInjection(t *testing.T) {
 		if gptList[i] != exp {
 			t.Errorf("GPT[%d] = %v, want %v", i, gptList[i], exp)
 		}
+	}
+}
+
+func TestApplyProxyGroupsPreserveDefaultProxy(t *testing.T) {
+	groups := []map[string]any{
+		{
+			"name":    "Proxy",
+			"type":    "select",
+			"proxies": []any{"HK-01", "US-01", "DIRECT"},
+		},
+		{
+			"name":    "Media",
+			"type":    "select",
+			"proxies": []any{"SG-01", "DIRECT"},
+		},
+	}
+
+	ext := config.ProxyGroupsExtension{
+		Inject: []config.ProxyGroupInject{
+			{
+				Target:         "Proxy",
+				PrependProxies: []string{"AUTO", "DIRECT"},
+			},
+		},
+	}
+
+	res := ApplyProxyGroups(groups, ext)
+	if len(res) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(res))
+	}
+
+	// For group "Proxy", upstream default was "HK-01".
+	// Even though "AUTO" was prepended, "HK-01" must remain at index 0.
+	proxyList := res[0]["proxies"].([]any)
+	if len(proxyList) < 1 || proxyList[0] != "HK-01" {
+		t.Fatalf("expected first proxy in Proxy group to be HK-01, got %v", proxyList)
+	}
+
+	// For group "Media", upstream default was "SG-01", untouched.
+	mediaList := res[1]["proxies"].([]any)
+	if len(mediaList) < 1 || mediaList[0] != "SG-01" {
+		t.Fatalf("expected first proxy in Media group to be SG-01, got %v", mediaList)
 	}
 }
 
