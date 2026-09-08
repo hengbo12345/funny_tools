@@ -23,6 +23,7 @@ import (
 	"mihomo-sub-publisher/internal/ruleproviders"
 	"mihomo-sub-publisher/internal/server"
 	"mihomo-sub-publisher/internal/source"
+	"mihomo-sub-publisher/internal/testutil"
 	"mihomo-sub-publisher/internal/token"
 )
 
@@ -210,7 +211,7 @@ tokens:
 	nonClashResp.Body.Close()
 
 	// 6. Test GET /config/alice-secret-token (Download #1 with Clash UA)
-	resp, err = getWithUA(baseURL+"/config/alice-secret-token", clashUA)
+	resp, err = testutil.GetWithUA(baseURL+"/config/alice-secret-token", clashUA)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /config/alice failed: code=%v, err=%v", resp.StatusCode, err)
 	}
@@ -272,14 +273,14 @@ tokens:
 	}
 
 	// 7. Test Download #2 (Reaches limit of 2)
-	resp, err = getWithUA(baseURL+"/config/alice-secret-token", clashUA)
+	resp, err = testutil.GetWithUA(baseURL+"/config/alice-secret-token", clashUA)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /config/alice (download 2) failed: code=%v, err=%v", resp.StatusCode, err)
 	}
 	resp.Body.Close()
 
 	// 8. Test Download #3 (Exhausted -> 403)
-	resp, err = getWithUA(baseURL+"/config/alice-secret-token", clashUA)
+	resp, err = testutil.GetWithUA(baseURL+"/config/alice-secret-token", clashUA)
 	if err != nil {
 		t.Fatalf("GET /config/alice failed: %v", err)
 	}
@@ -308,7 +309,7 @@ tokens:
 	}
 
 	// Download #4 should now succeed (200 OK)
-	resp, err = getWithUA(baseURL+"/config/alice-secret-token", clashUA)
+	resp, err = testutil.GetWithUA(baseURL+"/config/alice-secret-token", clashUA)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /config/alice after reset failed: code=%v, err=%v", resp.StatusCode, err)
 	}
@@ -324,7 +325,7 @@ tokens:
 	}
 
 	// Last-known-good snapshot must continue to be served!
-	resp, err = getWithUA(baseURL+"/config/alice-secret-token", clashUA)
+	resp, err = testutil.GetWithUA(baseURL+"/config/alice-secret-token", clashUA)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /config/alice should succeed with last-known-good snapshot during upstream failure: code=%v, err=%v", resp.StatusCode, err)
 	}
@@ -344,15 +345,4 @@ func init() {
 	// Ensure generator hash function handles nil and valid cases
 	_ = hex.EncodeToString
 	_ = sha256.Sum256
-}
-
-func getWithUA(url, ua string) (*http.Response, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	if ua != "" {
-		req.Header.Set("User-Agent", ua)
-	}
-	return http.DefaultClient.Do(req)
 }

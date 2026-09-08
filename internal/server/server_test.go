@@ -12,6 +12,7 @@ import (
 
 	"mihomo-sub-publisher/internal/config"
 	"mihomo-sub-publisher/internal/generator"
+	"mihomo-sub-publisher/internal/testutil"
 	"mihomo-sub-publisher/internal/token"
 )
 
@@ -88,7 +89,7 @@ func TestServerHealthAndStatus(t *testing.T) {
 	}
 
 	// 2. Status without snapshot (clash UA required since /status is gated)
-	resp, err = getWithUA(baseURL+"/status", "clash.meta")
+	resp, err = testutil.GetWithUA(baseURL+"/status", "clash.meta")
 	if err != nil {
 		t.Fatalf("GET /status failed: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestServerHealthAndStatus(t *testing.T) {
 			SHA256:          "sha123",
 		},
 	})
-	resp, err = getWithUA(baseURL+"/status", "clash.meta")
+	resp, err = testutil.GetWithUA(baseURL+"/status", "clash.meta")
 	if err != nil {
 		t.Fatalf("GET /status failed: %v", err)
 	}
@@ -118,17 +119,6 @@ func TestServerHealthAndStatus(t *testing.T) {
 	}
 }
 
-func getWithUA(url, ua string) (*http.Response, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	if ua != "" {
-		req.Header.Set("User-Agent", ua)
-	}
-	return http.DefaultClient.Do(req)
-}
-
 func TestServerConfigDownloadAndQuota(t *testing.T) {
 	srv, tokenStore, snapMgr := setupTestServer(t)
 	defer srv.Shutdown(context.Background())
@@ -137,7 +127,7 @@ func TestServerConfigDownloadAndQuota(t *testing.T) {
 	clashUA := "clash.meta"
 
 	// 1. No snapshot available -> 503
-	resp, err := getWithUA(baseURL+"/config/token-valid", clashUA)
+	resp, err := testutil.GetWithUA(baseURL+"/config/token-valid", clashUA)
 	if err != nil {
 		t.Fatalf("GET /config/token-valid failed: %v", err)
 	}
@@ -166,7 +156,7 @@ func TestServerConfigDownloadAndQuota(t *testing.T) {
 	item, _ := tokenStore.Authorize("token-valid")
 	initialRemaining := item.Remaining.Load()
 
-	resp, err = getWithUA(baseURL+"/config/token-valid", clashUA)
+	resp, err = testutil.GetWithUA(baseURL+"/config/token-valid", clashUA)
 	if err != nil {
 		t.Fatalf("GET /config/token-valid failed: %v", err)
 	}
@@ -193,7 +183,7 @@ func TestServerConfigDownloadAndQuota(t *testing.T) {
 	}
 
 	// 3. Non-existent token -> 404
-	resp, err = getWithUA(baseURL+"/config/non-existent-token", clashUA)
+	resp, err = testutil.GetWithUA(baseURL+"/config/non-existent-token", clashUA)
 	if err != nil {
 		t.Fatalf("GET /config/non-existent failed: %v", err)
 	}
@@ -203,7 +193,7 @@ func TestServerConfigDownloadAndQuota(t *testing.T) {
 	}
 
 	// 4. Exhausted token -> 403
-	resp, err = getWithUA(baseURL+"/config/token-exhausted", clashUA)
+	resp, err = testutil.GetWithUA(baseURL+"/config/token-exhausted", clashUA)
 	if err != nil {
 		t.Fatalf("GET /config/token-exhausted failed: %v", err)
 	}
@@ -213,7 +203,7 @@ func TestServerConfigDownloadAndQuota(t *testing.T) {
 	}
 
 	// 5. Expired token -> 403
-	resp, err = getWithUA(baseURL+"/config/token-expired", clashUA)
+	resp, err = testutil.GetWithUA(baseURL+"/config/token-expired", clashUA)
 	if err != nil {
 		t.Fatalf("GET /config/token-expired failed: %v", err)
 	}
@@ -250,7 +240,7 @@ func TestServerUserAgentAndHeaderValidation(t *testing.T) {
 	}
 
 	for _, ua := range nonClashUAs {
-		resp, err := getWithUA(baseURL+"/config/token-valid", ua)
+		resp, err := testutil.GetWithUA(baseURL+"/config/token-valid", ua)
 		if err != nil {
 			t.Fatalf("request failed for UA %q: %v", ua, err)
 		}
@@ -274,7 +264,7 @@ func TestServerUserAgentAndHeaderValidation(t *testing.T) {
 	}
 
 	for _, ua := range clashUAs {
-		resp, err := getWithUA(baseURL+"/config/token-valid", ua)
+		resp, err := testutil.GetWithUA(baseURL+"/config/token-valid", ua)
 		if err != nil {
 			t.Fatalf("request failed for UA %q: %v", ua, err)
 		}
@@ -292,7 +282,7 @@ func TestServerStatusGated(t *testing.T) {
 	baseURL := "http://" + srv.Addr()
 
 	// Clash UA -> 200
-	resp, err := getWithUA(baseURL+"/status", "clash.meta")
+	resp, err := testutil.GetWithUA(baseURL+"/status", "clash.meta")
 	if err != nil {
 		t.Fatalf("GET /status failed: %v", err)
 	}
@@ -302,7 +292,7 @@ func TestServerStatusGated(t *testing.T) {
 	resp.Body.Close()
 
 	// Non-clash UA -> 404 (cloaking, consistent with /config)
-	resp, err = getWithUA(baseURL+"/status", "curl/7.88.1")
+	resp, err = testutil.GetWithUA(baseURL+"/status", "curl/7.88.1")
 	if err != nil {
 		t.Fatalf("GET /status failed: %v", err)
 	}
@@ -345,7 +335,7 @@ func TestServerAllowedUserAgentsWildcard(t *testing.T) {
 		{"Stash/2.6.0", http.StatusNotFound},       // outside configured patterns
 	}
 	for _, tc := range cases {
-		resp, err := getWithUA(baseURL+"/config/token-valid", tc.ua)
+		resp, err := testutil.GetWithUA(baseURL+"/config/token-valid", tc.ua)
 		if err != nil {
 			t.Fatalf("request failed for UA %q: %v", tc.ua, err)
 		}
