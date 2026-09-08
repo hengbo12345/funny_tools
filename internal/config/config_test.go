@@ -200,8 +200,54 @@ source:
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if got := cfg.Source.Headers["user-agent"]; got != DefaultClientUserAgent {
+	if got := cfg.Source.Headers["User-Agent"]; got != DefaultClientUserAgent {
 		t.Errorf("expected legacy UA migrated to %q, got %q", DefaultClientUserAgent, got)
+	}
+	if len(cfg.Source.Headers) != 1 {
+		t.Errorf("expected exactly 1 header after migration, got %d: %v", len(cfg.Source.Headers), cfg.Source.Headers)
+	}
+}
+
+func TestLoadMigratesLegacyUserAgentCanonicalKey(t *testing.T) {
+	// 标准 User-Agent 拼写同样应被迁移，且不应残留重复 key
+	configFile := writeTempConfig(t, `
+version: 1
+source:
+  url: "https://example.com/sub.yaml"
+  headers:
+    User-Agent: "mihomo-sub-publisher/1.0"
+`)
+	cfg, err := Load(configFile)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if got := cfg.Source.Headers["User-Agent"]; got != DefaultClientUserAgent {
+		t.Errorf("expected legacy UA migrated to %q, got %q", DefaultClientUserAgent, got)
+	}
+	if len(cfg.Source.Headers) != 1 {
+		t.Errorf("expected exactly 1 header after migration, got %d: %v", len(cfg.Source.Headers), cfg.Source.Headers)
+	}
+}
+
+func TestLoadDoesNotTouchNonUserAgentHeaders(t *testing.T) {
+	// 值恰好等于 legacy UA 的非 User-Agent header 不应被改动
+	configFile := writeTempConfig(t, `
+version: 1
+source:
+  url: "https://example.com/sub.yaml"
+  headers:
+    X-Custom: "mihomo-sub-publisher/1.0"
+    Accept: "text/yaml"
+`)
+	cfg, err := Load(configFile)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if got := cfg.Source.Headers["X-Custom"]; got != "mihomo-sub-publisher/1.0" {
+		t.Errorf("expected X-Custom preserved verbatim, got %q", got)
+	}
+	if got := cfg.Source.Headers["Accept"]; got != "text/yaml" {
+		t.Errorf("expected Accept preserved verbatim, got %q", got)
 	}
 }
 

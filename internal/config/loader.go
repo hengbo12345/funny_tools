@@ -72,10 +72,12 @@ func Load(filePath string) (*Config, error) {
 	// One-time migration: rewrite the legacy default User-Agent (header names are
 	// case-insensitive, so match any spelling of the key). This runs at load time
 	// only — an explicit, non-legacy UA is always preserved verbatim.
+	// The config file itself is not rewritten; migration is in-memory only.
 	for k, v := range cfg.Source.Headers {
 		if strings.EqualFold(k, "User-Agent") && v == LegacyClientUserAgent {
-			cfg.Source.Headers[k] = DefaultClientUserAgent
-			logging.Logger().Info("config: migrated legacy default User-Agent",
+			delete(cfg.Source.Headers, k)
+			cfg.Source.Headers["User-Agent"] = DefaultClientUserAgent
+			logging.Logger().Debug("config: migrated legacy default User-Agent",
 				"from", LegacyClientUserAgent, "to", DefaultClientUserAgent)
 		}
 	}
