@@ -19,6 +19,9 @@ extensions:
     append: []
     replace: []
     remove: []
+    inject: []
+    # preserve-default: true  # 默认 true：保持上游组默认(首个)代理在 index 0；
+    #                         # 置 false 让 prepend/inject 的前置代理成为组内第一项
 
   rules:
     prepend:
@@ -44,6 +47,9 @@ server:
   listen: "127.0.0.1:8080"
   config-path: "/config/{token}"
   shutdown-timeout: 10s
+  # allowed-user-agents: ["*clash*", "*mihomo*", "*stash*"]  # 默认值；通配符 * 匹配任意字符（含 /），
+  #                                                          # 配置后按通配符匹配（模式 "clash" 只匹配字面 "clash"）
+  # required-headers: {}  # 例: {"X-Api-Key": "*"} 要求该头存在；值为具体字符串时要求精确(忽略大小写)匹配
 
 storage:
   cache-dir: "./cache"

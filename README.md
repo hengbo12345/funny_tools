@@ -8,7 +8,7 @@
 2. **原生 Mihomo 解析与校验**：基于 `github.com/metacubex/mihomo` 原生库，双重校验确保生成的配置合法有效。
 3. **声明式 Go DSL 扩展**：
    - 节点列表（Proxies）：`prepend`, `append`, `replace` (按 name 精确匹配), `remove`。
-   - 代理组（Proxy Groups）：`prepend`, `append`, `replace`, `remove`。
+   - 代理组（Proxy Groups）：`prepend`, `append`, `replace`, `remove`, `inject`（向现有组注入代理）；默认保持上游组默认(首个)代理在首位，可用 `preserve-default: false` 关闭。
    - 路由规则（Rules）：`prepend`, `append`, `replace`, `remove`，保持 `prepend -> source -> append` 顺序并进行稳定精确去重。
    - DNS 覆盖：浅合并（shallow merge）覆盖顶层配置。
    - 探针健康检查（Probe）：覆盖 `url-test`, `fallback`, `load-balance` 代理组的 `url`, `interval`, `timeout`。
@@ -146,6 +146,8 @@ echo '{"triggered_at":"'$(date -Iseconds)'"}' > data/token-reset-requests.json
 | `/health` | `GET` | 进程存活检查 | `{"status":"ok"}` (200 OK) |
 | `/status` | `GET` | 状态与快照元数据（不含敏感信息） | `{"status":"ready","snapshot_version":1,...}` |
 | `/config/{token}` | `GET` | 获取 Mihomo 完整订阅配置 | `Content-Type: application/yaml` |
+
+> **User-Agent 门控**：`/status` 与 `/config/{token}` 仅接受 Clash 系客户端 User-Agent（默认匹配 `clash` / `mihomo` / `stash` 子串，可用 `server.allowed-user-agents` 自定义通配符列表；配合 `server.required-headers` 可要求额外请求头）。不匹配的请求返回 `404`，与错误路径无法区分。`/health` 不做门控，供存活探针使用。
 
 错误响应统一为 JSON 格式：
 ```json
