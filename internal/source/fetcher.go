@@ -82,12 +82,6 @@ func (f *Fetcher) Fetch(ctx context.Context) (*FetchResult, error) {
 	return nil, fmt.Errorf("source fetch failed after %d attempts: %w", maxRetries, lastErr)
 }
 
-const (
-	// DefaultClientUserAgent is the default User-Agent sent to upstream subscriptions.
-	DefaultClientUserAgent = "clash.meta"
-	legacyDefaultUserAgent = "mihomo-sub-publisher/1.0"
-)
-
 var knownSubscriptionHeaders = map[string]struct{}{
 	"subscription-userinfo":   {},
 	"profile-update-interval": {},
@@ -117,10 +111,10 @@ func (f *Fetcher) doFetch(ctx context.Context) (*FetchResult, error) {
 		req.Header.Set(k, v)
 	}
 
-	// Default to a Clash-compatible User-Agent if none set or if legacy default placeholder
-	ua := strings.TrimSpace(req.Header.Get("User-Agent"))
-	if ua == "" || ua == legacyDefaultUserAgent {
-		req.Header.Set("User-Agent", DefaultClientUserAgent)
+	// Default to a Clash-compatible User-Agent if none set.
+	// (Legacy-default migration happens once at config load, not per fetch.)
+	if strings.TrimSpace(req.Header.Get("User-Agent")) == "" {
+		req.Header.Set("User-Agent", config.DefaultClientUserAgent)
 	}
 
 	resp, err := f.client.Do(req)

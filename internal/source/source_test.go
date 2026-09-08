@@ -154,3 +154,27 @@ func TestFetcherDefaultClashUAAndSubscriptionHeaders(t *testing.T) {
 		t.Errorf("unexpected Content-Disposition: %s", disp)
 	}
 }
+
+func TestFetcherKeepsExplicitUserAgent(t *testing.T) {
+	var receivedUA string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedUA = r.Header.Get("User-Agent")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("mixed-port: 7890\nproxies: []\n"))
+	}))
+	defer server.Close()
+
+	cfg := config.SourceConfig{
+		URL:     server.URL,
+		Timeout: 2 * time.Second,
+		Headers: map[string]string{"User-Agent": "my-custom-ua/2.0"},
+	}
+
+	fetcher := NewFetcher(cfg)
+	if _, err := fetcher.Fetch(context.Background()); err != nil {
+		t.Fatalf("Fetch failed: %v", err)
+	}
+	if receivedUA != "my-custom-ua/2.0" {
+		t.Errorf("expected explicit UA preserved, got %q", receivedUA)
+	}
+}
