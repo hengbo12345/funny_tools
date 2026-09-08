@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"sync"
 	"time"
@@ -77,7 +78,7 @@ func (p *Pipeline) Run(ctx context.Context, inputResult *source.FetchResult) (*S
 	currentSnap := p.snapshotMgr.Get()
 	if currentSnap != nil && currentSnap.Fingerprint == fingerprint {
 		logger.Info("generation skipped: fingerprint unchanged", "fingerprint", fingerprint)
-		if !headersEqual(currentSnap.Headers, fetchRes.Headers) {
+		if !maps.Equal(currentSnap.Headers, fetchRes.Headers) {
 			// updatedSnap is a copy of currentSnap with updated headers; Content byte slice is immutable.
 			updatedSnap := *currentSnap
 			updatedSnap.Headers = fetchRes.Headers
@@ -223,16 +224,4 @@ func (p *Pipeline) saveMetadata(cacheDir string, meta Metadata) {
 	if err := storage.AtomicWriteFile(filepath.Join(cacheDir, "generated.yaml.meta.json"), metaJSON, storage.DefaultFilePerm); err != nil {
 		logger.Warn("failed to write generated.yaml.meta.json", "error", err)
 	}
-}
-
-func headersEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
 }
