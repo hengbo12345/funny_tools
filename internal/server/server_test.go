@@ -16,6 +16,10 @@ import (
 )
 
 func setupTestServer(t *testing.T) (*Server, *token.Store, *generator.SnapshotManager) {
+	return setupTestServerWithConfig(t, nil)
+}
+
+func setupTestServerWithConfig(t *testing.T, mutate func(*config.Config)) (*Server, *token.Store, *generator.SnapshotManager) {
 	tmpDir := t.TempDir()
 	tokensFile := filepath.Join(tmpDir, "tokens.yaml")
 	stateFile := filepath.Join(tmpDir, "token-state.json")
@@ -55,6 +59,10 @@ tokens:
 		},
 	}
 
+	if mutate != nil {
+		mutate(cfg)
+	}
+
 	srv := NewServer(cfg, tokenStore, snapMgr)
 	if err := srv.Start(); err != nil {
 		t.Fatalf("failed to start server: %v", err)
@@ -79,8 +87,8 @@ func TestServerHealthAndStatus(t *testing.T) {
 		t.Errorf("expected status 200, got %d", resp.StatusCode)
 	}
 
-	// 2. Status without snapshot
-	resp, err = http.Get(baseURL + "/status")
+	// 2. Status without snapshot (clash UA required since /status is gated)
+	resp, err = getWithUA(baseURL+"/status", "clash.meta")
 	if err != nil {
 		t.Fatalf("GET /status failed: %v", err)
 	}
@@ -99,7 +107,7 @@ func TestServerHealthAndStatus(t *testing.T) {
 			SHA256:          "sha123",
 		},
 	})
-	resp, err = http.Get(baseURL + "/status")
+	resp, err = getWithUA(baseURL+"/status", "clash.meta")
 	if err != nil {
 		t.Fatalf("GET /status failed: %v", err)
 	}
@@ -272,6 +280,77 @@ func TestServerUserAgentAndHeaderValidation(t *testing.T) {
 		}
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("UA %q expected 200 OK, got %d", ua, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+}
+
+func TestServerStatusGated(t *testing.T) {
+	srv, _, _ := setupTestServer(t)
+	defer srv.Shutdown(context.Background())
+
+	baseURL := "http://" + srv.Addr()
+
+	// Clash UA -> 200
+	resp, err := getWithUA(baseURL+"/status", "clash.meta")
+	if err != nil {
+		t.Fatalf("GET /status failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 for clash UA, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Non-clash UA -> 404 (cloaking, consistent with /config)
+	resp, err = getWithUA(baseURL+"/status", "curl/7.88.1")
+	if err != nil {
+		t.Fatalf("GET /status failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 for non-clash UA, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestServerAllowedUserAgentsWildcard(t *testing.T) {
+	srv, tokenStore, _ := setupTestServerWithConfig(t, func(c *config.Config) {
+		// Pattern case should not matter (pre-lowered at construction).
+		c.Server.AllowedUserAgents = []string{"Clash*"}
+	})
+	defer srv.Shutdown(context.Background())
+
+	snapMgr := srv.snapshotMgr
+	snapMgr.Swap(&generator.Snapshot{
+		Metadata: generator.Metadata{
+			Version:         1,
+			SourceUpdatedAt: time.Now(),
+			GeneratedAt:     time.Now(),
+			SHA256:          "sha123",
+		},
+		Content: []byte("mixed-port: 7890\n"),
+	})
+	item, _ := tokenStore.Authorize("token-valid")
+	item.Remaining.Store(100)
+
+	baseURL := "http://" + srv.Addr()
+
+	cases := []struct {
+		ua   string
+		want int
+	}{
+		{"clash.meta", http.StatusOK},              // prefix match
+		{"ClashforWindows/0.20.39", http.StatusOK}, // prefix match, contains '/'
+		{"clash-verge/v1.7.7", http.StatusOK},      // prefix match
+		{"mihomo", http.StatusNotFound},            // no longer substring-matched
+		{"Stash/2.6.0", http.StatusNotFound},       // outside configured patterns
+	}
+	for _, tc := range cases {
+		resp, err := getWithUA(baseURL+"/config/token-valid", tc.ua)
+		if err != nil {
+			t.Fatalf("request failed for UA %q: %v", tc.ua, err)
+		}
+		if resp.StatusCode != tc.want {
+			t.Errorf("UA %q expected %d, got %d", tc.ua, tc.want, resp.StatusCode)
 		}
 		resp.Body.Close()
 	}

@@ -32,6 +32,9 @@ type Server struct {
 	tokenStore  *token.Store
 	snapshotMgr *generator.SnapshotManager
 	listener    net.Listener
+	// allowedUAPatterns holds the lowercased, trimmed UA wildcard patterns
+	// used to gate /config and /status; computed once at construction.
+	allowedUAPatterns []string
 }
 
 // NewServer creates a new HTTP Server.
@@ -46,14 +49,23 @@ func NewServer(
 		snapshotMgr: snapshotMgr,
 	}
 
+	patterns := cfg.Server.AllowedUserAgents
+	if len(patterns) == 0 {
+		patterns = config.DefaultAllowedUserAgents
+	}
+	s.allowedUAPatterns = make([]string, 0, len(patterns))
+	for _, p := range patterns {
+		s.allowedUAPatterns = append(s.allowedUAPatterns, strings.ToLower(strings.TrimSpace(p)))
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/status", s.handleStatus)
+	mux.HandleFunc("/status", s.gate(s.handleStatus))
 
 	// Register config route matching template prefix
 	// Default template is "/config/{token}"
 	prefix, _ := parseConfigPathPrefix(cfg.Server.ConfigPath)
-	mux.HandleFunc(prefix, s.handleConfig)
+	mux.HandleFunc(prefix, s.gate(s.handleConfig))
 
 	s.httpServer = &http.Server{
 		Addr:         cfg.Server.Listen,
@@ -174,14 +186,20 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(res)
 }
 
-func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
-	// Validate headers: only clash-like User-Agents and expected headers are accepted.
-	// Unexpected headers return 404 Not Found.
-	if !s.isExpectedRequest(r) {
-		s.writeJSONError(w, http.StatusNotFound, "not_found")
-		return
+// gate rejects requests whose User-Agent / required headers do not look like a
+// Clash-compatible client, responding 404 so the endpoint is indistinguishable
+// from a wrong path. /health stays open for liveness probes.
+func (s *Server) gate(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.isExpectedRequest(r) {
+			s.writeJSONError(w, http.StatusNotFound, "not_found")
+			return
+		}
+		next(w, r)
 	}
+}
 
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		s.writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
@@ -247,29 +265,22 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) isExpectedRequest(r *http.Request) bool {
-	// 1. User-Agent check (must be a Clash-compatible client)
+	// 1. User-Agent check (must match one of the configured wildcard patterns;
+	// defaults to *clash*/*mihomo*/*stash* — i.e. substring semantics).
 	ua := strings.TrimSpace(r.Header.Get("User-Agent"))
 	if ua == "" {
 		return false
 	}
 	lowerUA := strings.ToLower(ua)
 
-	uaMatched := false
-	if len(s.cfg.Server.AllowedUserAgents) > 0 {
-		for _, pattern := range s.cfg.Server.AllowedUserAgents {
-			lowerPat := strings.ToLower(strings.TrimSpace(pattern))
-			if matchWildcard(lowerPat, lowerUA) {
-				uaMatched = true
-				break
-			}
+	matched := false
+	for _, pattern := range s.allowedUAPatterns {
+		if matchWildcard(pattern, lowerUA) {
+			matched = true
+			break
 		}
-	} else {
-		uaMatched = strings.Contains(lowerUA, "clash") ||
-			strings.Contains(lowerUA, "mihomo") ||
-			strings.Contains(lowerUA, "stash")
 	}
-
-	if !uaMatched {
+	if !matched {
 		return false
 	}
 
