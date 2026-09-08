@@ -177,3 +177,47 @@ func TestConfigValidationErrors(t *testing.T) {
 		})
 	}
 }
+
+func writeTempConfig(t *testing.T, yamlContent string) string {
+	t.Helper()
+	configFile := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configFile, []byte(yamlContent), 0600); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+	return configFile
+}
+
+func TestLoadMigratesLegacyUserAgent(t *testing.T) {
+	// 大小写不同的 header key（user-agent）也应被迁移
+	configFile := writeTempConfig(t, `
+version: 1
+source:
+  url: "https://example.com/sub.yaml"
+  headers:
+    user-agent: "mihomo-sub-publisher/1.0"
+`)
+	cfg, err := Load(configFile)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if got := cfg.Source.Headers["user-agent"]; got != DefaultClientUserAgent {
+		t.Errorf("expected legacy UA migrated to %q, got %q", DefaultClientUserAgent, got)
+	}
+}
+
+func TestLoadKeepsExplicitCustomUserAgent(t *testing.T) {
+	configFile := writeTempConfig(t, `
+version: 1
+source:
+  url: "https://example.com/sub.yaml"
+  headers:
+    User-Agent: "my-custom-ua/2.0"
+`)
+	cfg, err := Load(configFile)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if got := cfg.Source.Headers["User-Agent"]; got != "my-custom-ua/2.0" {
+		t.Errorf("expected explicit UA preserved, got %q", got)
+	}
+}
