@@ -161,6 +161,27 @@ func TestConfigValidationErrors(t *testing.T) {
 			},
 			expectError: true,
 		},
+		{
+			name: "whitespace allowed-user-agents entry",
+			modify: func(c *Config) {
+				c.Server.AllowedUserAgents = []string{"  "}
+			},
+			expectError: true,
+		},
+		{
+			name: "empty required-headers key",
+			modify: func(c *Config) {
+				c.Server.RequiredHeaders = map[string]string{"": "*"}
+			},
+			expectError: true,
+		},
+		{
+			name: "whitespace required-headers value",
+			modify: func(c *Config) {
+				c.Server.RequiredHeaders = map[string]string{"X-Api-Key": "  "}
+			},
+			expectError: true,
+		},
 	}
 
 	for _, tt := range tests {

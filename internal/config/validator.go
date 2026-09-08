@@ -72,6 +72,21 @@ func Validate(cfg *Config) error {
 	if cfg.Server.ShutdownTimeout <= 0 {
 		return fmt.Errorf("server.shutdown-timeout must be positive, got %v", cfg.Server.ShutdownTimeout)
 	}
+	for i, ua := range cfg.Server.AllowedUserAgents {
+		if strings.TrimSpace(ua) == "" {
+			return fmt.Errorf("server.allowed-user-agents[%d] cannot be empty or whitespace", i)
+		}
+	}
+	for key, val := range cfg.Server.RequiredHeaders {
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("server.required-headers key cannot be empty or whitespace")
+		}
+		// "" and "*" both mean "header must be present, value unconstrained";
+		// anything else is an exact (case-insensitive) match — whitespace-only is a typo.
+		if val != "" && val != "*" && strings.TrimSpace(val) == "" {
+			return fmt.Errorf("server.required-headers[%q] value cannot be whitespace-only (use \"*\" to require presence only)", key)
+		}
+	}
 
 	// Validate Storage
 	if strings.TrimSpace(cfg.Storage.CacheDir) == "" {
