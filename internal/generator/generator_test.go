@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,5 +152,89 @@ rules:
 	}
 	if restoredSnap.Headers["Subscription-Userinfo"] != "upload=100; download=200; total=1000; expire=1800000000" {
 		t.Errorf("restored headers missing or incorrect: %v", restoredSnap.Headers)
+	}
+}
+
+func TestPipelineAutoCreateProxyGroups(t *testing.T) {
+	tmpDir := t.TempDir()
+	cacheDir := filepath.Join(tmpDir, "cache")
+	dataDir := filepath.Join(tmpDir, "data")
+
+	cfg := &config.Config{
+		Version: 1,
+		Source: config.SourceConfig{
+			URL:      "http://example.com/sub.yaml",
+			Interval: 1 * time.Hour,
+			Timeout:  10 * time.Second,
+		},
+		Extensions: config.ExtensionConfig{
+			Proxies: config.ProxiesExtension{
+				Prepend: []map[string]any{
+					{"name": "MY-VPS", "type": "direct"},
+				},
+			},
+			Rules: config.RulesExtension{
+				Prepend: []string{
+					"RULE-SET,direct-domain,DIRECT",
+					"RULE-SET,proxy-domain,TelegramGroup",
+				},
+				Append: []string{
+					"MATCH,PROXY",
+				},
+			},
+		},
+		Rules: config.RulesConfig{
+			Providers: map[string]config.ProviderConfig{
+				"clash-rules-cn": {
+					Enabled:          true,
+					ClientPathPrefix: "./ruleset/",
+				},
+			},
+		},
+		Storage: config.StorageConfig{
+			CacheDir: cacheDir,
+			DataDir:  dataDir,
+		},
+	}
+
+	sourceContent := `
+mixed-port: 7890
+mode: rule
+proxies:
+  - name: "HK-01"
+    type: direct
+proxy-groups:
+  - name: "AirportGroup"
+    type: select
+    proxies:
+      - "HK-01"
+      - DIRECT
+rules:
+  - DOMAIN-SUFFIX,google.com,AirportGroup
+`
+	fetchRes := &source.FetchResult{
+		Content:   []byte(sourceContent),
+		SHA256:    "source-sha-abcdef",
+		UpdatedAt: time.Now(),
+	}
+
+	registry := ruleproviders.NewDefaultRegistry()
+	extEngine := extension.NewEngine()
+	snapMgr := NewSnapshotManager()
+
+	pipeline := NewPipeline(cfg, nil, registry, extEngine, snapMgr)
+
+	snap, err := pipeline.Run(context.Background(), fetchRes)
+	if err != nil {
+		t.Fatalf("Pipeline.Run failed: %v", err)
+	}
+
+	// Generated YAML should be valid and contain the newly created groups TelegramGroup and PROXY
+	finalYAML := string(snap.Content)
+	if !strings.Contains(finalYAML, "name: TelegramGroup") {
+		t.Errorf("expected TelegramGroup in generated YAML, got:\n%s", finalYAML)
+	}
+	if !strings.Contains(finalYAML, "name: PROXY") {
+		t.Errorf("expected PROXY in generated YAML, got:\n%s", finalYAML)
 	}
 }

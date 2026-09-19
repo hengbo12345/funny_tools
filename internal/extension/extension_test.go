@@ -308,3 +308,266 @@ func TestApplyProxyGroupsReplaceKeepsExplicitOrder(t *testing.T) {
 		t.Fatalf("expected replaced group's explicit first proxy AUTO at index 0, got %v", proxyList)
 	}
 }
+
+func TestEnsureRuleProxyGroups_MissingGroupCreated(t *testing.T) {
+	initialGroups := []map[string]any{
+		{
+			"name":    "FirstGroup",
+			"type":    "select",
+			"proxies": []any{"HK-01", "US-01", "DIRECT"},
+		},
+	}
+
+	proxiesExt := config.ProxiesExtension{
+		Prepend: []map[string]any{
+			{"name": "SelfNode-1", "type": "ss"},
+		},
+		Append: []map[string]any{
+			{"name": "SelfNode-2", "type": "vmess"},
+		},
+	}
+
+	rulesExt := config.RulesExtension{
+		Prepend: []string{
+			"RULE-SET,telegram,TelegramGroup",
+			"DOMAIN-SUFFIX,google.com,GoogleGroup",
+		},
+		Replace: []config.RuleReplace{
+			{
+				Match: "DOMAIN-SUFFIX,openai.com,DIRECT",
+				Value: "DOMAIN-SUFFIX,openai.com,OpenAIGroup",
+			},
+		},
+		Append: []string{
+			"MATCH,FallbackGroup",
+		},
+	}
+
+	res := EnsureRuleProxyGroups(initialGroups, rulesExt, proxiesExt, nil)
+
+	// We expect FirstGroup + TelegramGroup + GoogleGroup + OpenAIGroup + FallbackGroup = 5 groups
+	if len(res) != 5 {
+		t.Fatalf("expected 5 groups, got %d", len(res))
+	}
+
+	expectedCreated := []string{"TelegramGroup", "GoogleGroup", "OpenAIGroup", "FallbackGroup"}
+	expectedProxies := []any{"SelfNode-1", "SelfNode-2", "HK-01", "US-01", "DIRECT"}
+
+	for i, groupName := range expectedCreated {
+		group := res[i+1]
+		if group["name"] != groupName {
+			t.Errorf("group %d name: got %v, want %v", i+1, group["name"], groupName)
+		}
+		if group["type"] != "select" {
+			t.Errorf("group %s type: got %v, want select", groupName, group["type"])
+		}
+
+		pList, ok := group["proxies"].([]any)
+		if !ok {
+			t.Fatalf("group %s proxies is not []any: %T", groupName, group["proxies"])
+		}
+		if len(pList) != len(expectedProxies) {
+			t.Fatalf("group %s proxies len: got %d, want %d: %v", groupName, len(pList), len(expectedProxies), pList)
+		}
+		for j, exp := range expectedProxies {
+			if pList[j] != exp {
+				t.Errorf("group %s proxies[%d]: got %v, want %v", groupName, j, pList[j], exp)
+			}
+		}
+	}
+}
+
+func TestEnsureRuleProxyGroups_BuiltinAndExistingProxiesIgnored(t *testing.T) {
+	initialGroups := []map[string]any{
+		{
+			"name":    "FirstGroup",
+			"type":    "select",
+			"proxies": []any{"HK-01", "DIRECT"},
+		},
+	}
+
+	existingProxies := []map[string]any{
+		{"name": "StandaloneNode", "type": "ss"},
+	}
+
+	rulesExt := config.RulesExtension{
+		Prepend: []string{
+			"RULE-SET,direct,DIRECT",
+			"RULE-SET,reject,REJECT",
+			"RULE-SET,reject-drop,REJECT-DROP",
+			"RULE-SET,pass,PASS",
+			"MATCH,COMPATIBLE",
+			"DOMAIN,example.com,FirstGroup",     // Already exists
+			"DOMAIN,proxy.com,StandaloneNode", // Already a proxy node
+		},
+	}
+
+	res := EnsureRuleProxyGroups(initialGroups, rulesExt, config.ProxiesExtension{}, existingProxies)
+
+	// No new groups should be created
+	if len(res) != 1 {
+		t.Fatalf("expected 1 group, got %d: %v", len(res), res)
+	}
+}
+
+func TestEnsureRuleProxyGroups_DeduplicationAndOrder(t *testing.T) {
+	initialGroups := []map[string]any{
+		{
+			"name":    "AirportDefault",
+			"type":    "select",
+			"proxies": []any{"HK-01", "SelfNode-1", "US-01", "DIRECT"},
+		},
+	}
+
+	proxiesExt := config.ProxiesExtension{
+		Prepend: []map[string]any{
+			{"name": "SelfNode-1", "type": "ss"}, // Overlaps with AirportDefault
+		},
+		Append: []map[string]any{
+			{"name": "SelfNode-2", "type": "socks5"},
+		},
+		Remove: []string{"RemovedNode"},
+	}
+
+	rulesExt := config.RulesExtension{
+		Prepend: []string{
+			"DOMAIN-SUFFIX,a.com,NewGroup",
+			"DOMAIN-SUFFIX,b.com,NewGroup", // Duplicate reference
+		},
+	}
+
+	res := EnsureRuleProxyGroups(initialGroups, rulesExt, proxiesExt, nil)
+
+	if len(res) != 2 {
+		t.Fatalf("expected 2 groups (AirportDefault + NewGroup), got %d", len(res))
+	}
+
+	newGroup := res[1]
+	if newGroup["name"] != "NewGroup" {
+		t.Errorf("expected group name NewGroup, got %v", newGroup["name"])
+	}
+
+	pList := newGroup["proxies"].([]any)
+	// Union: SelfNode-1, SelfNode-2 (custom first), then HK-01, US-01, DIRECT (AirportDefault nodes without SelfNode-1 duplicate)
+	expected := []string{"SelfNode-1", "SelfNode-2", "HK-01", "US-01", "DIRECT"}
+	if len(pList) != len(expected) {
+		t.Fatalf("expected %d proxies, got %d: %v", len(expected), len(pList), pList)
+	}
+	for i, exp := range expected {
+		if pList[i] != exp {
+			t.Errorf("pos %d: got %v, want %v", i, pList[i], exp)
+		}
+	}
+}
+
+func TestEngineApply_AutoCreateProxyGroups(t *testing.T) {
+	engine := NewEngine()
+
+	var raw mihomoCfg.RawConfig
+	raw.Proxy = []map[string]any{
+		{"name": "HK-01", "type": "ss"},
+	}
+	raw.ProxyGroup = []map[string]any{
+		{
+			"name":    "Airport-Select",
+			"type":    "select",
+			"proxies": []any{"HK-01", "DIRECT"},
+		},
+	}
+	raw.Rule = []string{
+		"DOMAIN-SUFFIX,upstream.com,DIRECT",
+	}
+
+	ext := config.ExtensionConfig{
+		Proxies: config.ProxiesExtension{
+			Prepend: []map[string]any{
+				{"name": "MyVPS", "type": "ss"},
+			},
+		},
+		Rules: config.RulesExtension{
+			Prepend: []string{
+				"RULE-SET,direct-domain,DIRECT",
+			},
+			Append: []string{
+				"MATCH,PROXY",
+			},
+		},
+	}
+
+	err := engine.Apply(&raw, ext)
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	if len(raw.ProxyGroup) != 2 {
+		t.Fatalf("expected 2 proxy groups, got %d", len(raw.ProxyGroup))
+	}
+
+	createdGroup := raw.ProxyGroup[1]
+	if createdGroup["name"] != "PROXY" {
+		t.Errorf("expected PROXY group name, got %v", createdGroup["name"])
+	}
+	if createdGroup["type"] != "select" {
+		t.Errorf("expected type select, got %v", createdGroup["type"])
+	}
+
+	pList := createdGroup["proxies"].([]any)
+	expected := []string{"MyVPS", "HK-01", "DIRECT"}
+	if len(pList) != len(expected) {
+		t.Fatalf("expected %d proxies, got %d: %v", len(expected), len(pList), pList)
+	}
+	for i, exp := range expected {
+		if pList[i] != exp {
+			t.Errorf("PROXY proxies[%d] = %v, want %v", i, pList[i], exp)
+		}
+	}
+}
+
+func TestEnsureRuleProxyGroups_EmptyFallbackToDIRECT(t *testing.T) {
+	// When there are no proxies and no groups, the created proxy-group must fallback to ["DIRECT"]
+	// to avoid Clash client parse error: "proxy group must have at least one proxy"
+	rulesExt := config.RulesExtension{
+		Append: []string{"MATCH,PROXY"},
+	}
+
+	res := EnsureRuleProxyGroups(nil, rulesExt, config.ProxiesExtension{}, nil)
+	if len(res) != 1 {
+		t.Fatalf("expected 1 group created, got %d", len(res))
+	}
+
+	pList := res[0]["proxies"].([]any)
+	if len(pList) != 1 || pList[0] != "DIRECT" {
+		t.Fatalf("expected proxies to fallback to [DIRECT], got %v", pList)
+	}
+}
+
+func TestEnsureRuleProxyGroups_FiltersGhostProxies(t *testing.T) {
+	existingProxies := []map[string]any{
+		{"name": "ValidNode", "type": "ss"},
+	}
+
+	proxiesExt := config.ProxiesExtension{
+		Replace: []config.ProxyReplace{
+			{Match: "NonExistent", Value: map[string]any{"name": "GhostNode"}},
+		},
+		Prepend: []map[string]any{
+			{"name": "ValidNode", "type": "ss"},
+		},
+	}
+
+	rulesExt := config.RulesExtension{
+		Append: []string{"MATCH,PROXY"},
+	}
+
+	res := EnsureRuleProxyGroups(nil, rulesExt, proxiesExt, existingProxies)
+	if len(res) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(res))
+	}
+
+	pList := res[0]["proxies"].([]any)
+	for _, p := range pList {
+		if p == "GhostNode" {
+			t.Fatalf("GhostNode should have been filtered out as it does not exist in proxies")
+		}
+	}
+}

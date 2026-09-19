@@ -30,6 +30,7 @@ func (e *Engine) Apply(raw *mihomoCfg.RawConfig, ext config.ExtensionConfig) err
 	raw.ProxyGroup = ApplyProbe(raw.ProxyGroup, ext.Probe)
 
 	// 4. Rules
+	raw.ProxyGroup = EnsureRuleProxyGroups(raw.ProxyGroup, ext.Rules, ext.Proxies, raw.Proxy)
 	raw.Rule = ApplyRules(raw.Rule, ext.Rules)
 
 	// 5. DNS

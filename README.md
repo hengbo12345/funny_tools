@@ -63,11 +63,13 @@ mihomo-sub-publisher/
 ### 1. 编译二进制
 
 ```bash
-# 编译二进制（注入版本号、Git Commit ID 与构建时间）
-go build -ldflags="-s -w -X mihomo-sub-publisher/internal/generator.GeneratorVersion=1.1.0 -X mihomo-sub-publisher/internal/generator.GitCommit=$(git rev-parse HEAD) -X mihomo-sub-publisher/internal/generator.BuildDate=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" -o bin/publisher ./cmd/publisher
+# 静态编译二进制（推荐：无 glibc 依赖，适配所有 Linux 发行版）
+CGO_ENABLED=0 GOOS=linux go build -trimpath \
+  -ldflags="-s -w -X mihomo-sub-publisher/internal/generator.GeneratorVersion=1.1.0 -X mihomo-sub-publisher/internal/generator.GitCommit=$(git rev-parse HEAD) -X mihomo-sub-publisher/internal/generator.BuildDate=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+  -o bin/publisher ./cmd/publisher
 
-# 或基础编译（Go 1.18+ 会自动从 VCS 内嵌 Git Commit 与时间）
-go build -o bin/publisher ./cmd/publisher
+# 或基础静态编译（Go 1.18+ 会自动从 VCS 内嵌 Git Commit 与时间）
+CGO_ENABLED=0 go build -trimpath -o bin/publisher ./cmd/publisher
 ```
 
 ### 2. 配置与启动
