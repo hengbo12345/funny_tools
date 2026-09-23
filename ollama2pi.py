@@ -56,7 +56,6 @@ Examples:
 from __future__ import annotations
 
 import concurrent.futures
-import hashlib
 import json
 import logging
 import os
@@ -79,6 +78,13 @@ OLLAMA_HOST = os.environ.get(
     "OLLAMA_HOST",
     "http://127.0.0.1:11434",
 ).rstrip("/")
+
+#
+# Strip a trailing "/v1": generate_provider appends it once.
+# A user-supplied ".../v1" would otherwise yield ".../v1/v1".
+#
+if OLLAMA_HOST.endswith("/v1"):
+    OLLAMA_HOST = OLLAMA_HOST[:-3]
 
 PI_CONFIG = Path(
     os.environ.get(
@@ -212,6 +218,28 @@ def http_json(
         ) as response:
 
             raw = response.read()
+
+    except urllib.error.HTTPError as exc:
+        #
+        # HTTPError is a subclass of URLError; surface the
+        # status code and body to aid debugging.
+        #
+        body = b""
+        try:
+            body = exc.read()
+        except Exception:
+            pass
+
+        text = (
+            body.decode("utf-8", "replace")
+            if body
+            else exc.reason
+        )
+
+        raise RuntimeError(
+            f"HTTP {exc.code} for {url}: {exc.reason}"
+            + (f": {text[:500]}" if text else "")
+        ) from exc
 
     except urllib.error.URLError as exc:
         raise RuntimeError(
@@ -706,6 +734,50 @@ def metadata_to_pi_model(
 # ============================================================================
 
 
+def validate_model_for_pi(
+    model: dict[str, Any],
+) -> None:
+    """
+    Pre-write guard so we never emit a models.json that pi
+    would reject (a rejected entry blocks the whole provider,
+    as happened with the old thinkingLevelMap off:false bug).
+    """
+
+    wid = model.get("id")
+
+    context_window = model.get("contextWindow")
+
+    max_tokens = model.get("maxTokens")
+
+    if not isinstance(context_window, int) or context_window <= 0:
+        raise RuntimeError(
+            f"{wid}: contextWindow must be a positive int"
+        )
+
+    if not isinstance(max_tokens, int) or max_tokens <= 0:
+        raise RuntimeError(
+            f"{wid}: maxTokens must be a positive int"
+        )
+
+    if max_tokens > context_window:
+        log.warning(
+            "%s: maxTokens (%d) exceeds contextWindow (%d)",
+            wid,
+            max_tokens,
+            context_window,
+        )
+
+    mapping = model.get("thinkingLevelMap")
+
+    if mapping is not None:
+        for level, value in mapping.items():
+            if not (isinstance(value, str) or value is None):
+                raise RuntimeError(
+                    f"{wid}: thinkingLevelMap['{level}'] must be"
+                    f" string or null, got {value!r}"
+                )
+
+
 def load_pi_config() -> dict[str, Any]:
 
     if not PI_CONFIG.exists():
@@ -981,6 +1053,12 @@ def main() -> int:
         PI_CONFIG,
     )
 
+    if MAX_TOKENS_MODE not in ("auto", "context", "fixed"):
+        log.warning(
+            "Unknown MAX_TOKENS_MODE=%r, falling back to auto",
+            MAX_TOKENS_MODE,
+        )
+
     #
     # Step 1:
     # Discover models.
@@ -1065,6 +1143,14 @@ def main() -> int:
         raise RuntimeError(
             "No completion-capable Ollama models found."
         )
+
+    #
+    # Step 6.5:
+    # Validate generated models so pi accepts the config
+    # before we touch PI_CONFIG on disk.
+    #
+    for model in pi_models:
+        validate_model_for_pi(model)
 
     #
     # Step 7:
