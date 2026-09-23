@@ -102,3 +102,16 @@ Requires a pi version whose `models.json` schema validates
 `thinkingLevelMap` values as `string | null` (verified with pi 0.87.1).
 Works against Ollama's OpenAI-compatible endpoint (`/v1`), including the
 `developer` role and `reasoning_effort` parameter.
+
+## npm package release notes
+
+npm enforces mandatory OTP (two-factor), and its authentication does not accept
+authenticator apps or other software OTP code generators — only a hardware passkey
+works. So publishing can only be done with:
+
+```sh
+npm publish --registry=https://registry.npmjs.org/ --auth-type=web
+```
+
+npm then prints an OTP authentication URL. Open that URL in a browser to complete
+the authentication, then return to the terminal to continue.

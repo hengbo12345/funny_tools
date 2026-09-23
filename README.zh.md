@@ -97,3 +97,15 @@ PI_OLLAMA_PROVIDER=my-ollama OLLAMA_HOST=http://localhost:9981 ./ollama2pi.py
 要求 pi 版本的 `models.json` 校验支持 `thinkingLevelMap` 值为 `string | null`
 （已在 pi 0.87.1 上验证通过）。兼容 Ollama 的 OpenAI 接口（`/v1`），
 包括 `developer` 角色与 `reasoning_effort` 参数。
+
+## npm 包发布须知
+
+由于 npm 已开启强制 OTP（two-factor），且其认证不接受 authenticator app 等软件
+OTP code generator 方案，只能通过硬件 passkey 完成。因此发布只能用以下方式：
+
+```sh
+npm publish --registry=https://registry.npmjs.org/ --auth-type=web
+```
+
+执行后 npm 会输出一个 OTP 认证 URL，用户将该 URL 复制到浏览器中完成认证，
+再回到终端继续即可。
