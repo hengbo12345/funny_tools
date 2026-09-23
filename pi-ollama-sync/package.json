@@ -1,0 +1,48 @@
+{
+  "name": "pi-ollama-sync",
+  "version": "0.1.0",
+  "description": "Pi Agent extension: synchronize Ollama models into pi's models.json so they appear in the /model picker",
+  "type": "module",
+  "license": "MIT",
+  "author": "Sherwin.Yan <BugIt@icxy.us>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hengbo12345/funny_tools.git",
+    "directory": "pi-ollama-sync"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-agent",
+    "ollama",
+    "models",
+    "provider",
+    "sync"
+  ],
+  "files": [
+    "index.ts",
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@types/node": "24.9.1",
+    "typebox": "1.3.27",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  }
+}
