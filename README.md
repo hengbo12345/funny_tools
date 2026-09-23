@@ -1,5 +1,7 @@
 # funny_tools
 
+[English](README.md) · [中文](README.zh.md)
+
 Variety of hand-made tools living in branches.
 
 ## ollama2pi.py
