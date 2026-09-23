@@ -1,102 +1,97 @@
 # funny_tools
 
-Variety of hand-made tools living in branches.
+手工制作的多种工具，分散在不同分支中维护。
 
 ## ollama2pi.py
 
-Synchronize Ollama models into [pi agent](https://pi.dev) custom model
-configuration (`~/.pi/agent/models.json`).
+将 Ollama 上的模型同步到 [pi agent](https://pi.dev) 的自定义模型配置
+（`~/.pi/agent/models.json`），让这些模型可以出现在 pi 的 `/model` 选择列表中。
 
-The script discovers models from Ollama's `/api/tags`, inspects each one via
-`/api/show`, and writes an `ollama` provider entry so the models show up in
-pi's `/model` picker. Only models that report the `completion` capability are
-written (embedding-only models are skipped).
+脚本通过 Ollama 的 `/api/tags` 发现模型，再用 `/api/show` 逐个获取元数据，
+最终写入一个名为 `ollama` 的 provider 条目。只写入带有 `completion` 能力的模型
+（纯 embedding 模型会被跳过）。
 
-### Features
+### 特性
 
-- Auto-discovery of Ollama models (`/api/tags`)
-- Per-model metadata (`/api/show`): context window, parameter size/count,
-  quantization, family/architecture, format
-- Capability detection: `completion`, `tools`, `thinking`, `vision`, `embedding`
-- Thinking-level mapping per model family (`thinkingLevelMap`), with
-  `off -> reasoning_effort: "none"` so thinking can actually be disabled on
-  Ollama's OpenAI-compatible endpoint
-- Vision models get `input: ["text", "image"]`
-- Preserves all other providers in `models.json`; only the `ollama` provider
-  entry is replaced
-- Leaves the config untouched when Ollama is unreachable or returns no models
-- Atomic write (temp file + `os.replace`), automatic backup of the previous
-  config, and a digest-based metadata cache so `/api/show` is only called when
-  a model actually changed
+- 通过 `/api/tags` 自动发现 Ollama 模型
+- 通过 `/api/show` 获取详细信息：上下文窗口、参数量/参数字符、量化方式、
+  family/架构、文件格式
+- 能力识别：`completion`（补全）、`tools`（工具）、`thinking`（思考）、
+  `vision`（视觉）、`embedding`（嵌入）
+- 为每个模型族生成思考级别映射（`thinkingLevelMap`），其中
+   `off -> reasoning_effort: "none"`，从而能在 Ollama 的 OpenAI 兼容接口上真正关闭思考
+- 视觉模型自动设置 `input: ["text", "image"]`
+- 保留 `models.json` 中其他 provider，只替换 `ollama` 这一项
+- 当 Ollama 无法访问或没有返回模型时，不修改现有配置
+- 原子写入（临时文件 + `os.replace`），自动备份旧配置，并基于 digest 的
+  元数据缓存，仅在模型发生变化时才重新调用 `/api/show`
 
-### Requirements
+### 环境要求
 
-- Python >= 3.9, no third-party packages
+- Python >= 3.9，无需第三方依赖
 
-### Usage
+### 使用方法
 
 ```sh
 chmod +x ollama2pi.py
 ./ollama2pi.py
 ```
 
-### Defaults
+### 默认值
 
-| Setting    | Value                      |
-|------------|----------------------------|
-| Ollama     | `http://127.0.0.1:11434`   |
-| Pi config  | `~/.pi/agent/models.json`  |
-| Provider   | `ollama`                   |
+| 项目      | 默认值                       |
+|-----------|-----------------------------|
+| Ollama    | `http://127.0.0.1:11434`    |
+| Pi 配置   | `~/.pi/agent/models.json`   |
+| Provider  | `ollama`                    |
 
-### Environment variables
+### 环境变量
 
-| Variable             | Default                  | Description                                        |
-|----------------------|--------------------------|----------------------------------------------------|
-| `OLLAMA_HOST`        | `http://127.0.0.1:11434` | Ollama API endpoint                                 |
-| `PI_CONFIG`          | `~/.pi/agent/models.json`| Pi models.json path                                 |
-| `PI_OLLAMA_PROVIDER` | `ollama`                 | Provider name written into models.json              |
-| `MAX_TOKENS_MODE`    | `auto`                   | `auto` / `context` / `fixed`                        |
-| `MAX_TOKENS`         | `32768`                  | Used when `MAX_TOKENS_MODE=fixed`                   |
-| `SHOW_WORKERS`       | `4`                      | Concurrent `/api/show` requests                     |
-| `OLLAMA_TIMEOUT`     | `60`                     | HTTP timeout in seconds                             |
+| 变量                | 默认值                    | 说明                                        |
+|--------------------|--------------------------|---------------------------------------------|
+| `OLLAMA_HOST`      | `http://127.0.0.1:11434` | Ollama API 地址                              |
+| `PI_CONFIG`        | `~/.pi/agent/models.json`| Pi 的 models.json 路径                       |
+| `PI_OLLAMA_PROVIDER`| `ollama`                | 写入 models.json 时的 provider 名称          |
+| `MAX_TOKENS_MODE`  | `auto`                   | `auto` / `context` / `fixed`                |
+| `MAX_TOKENS`       | `32768`                  | 仅在 `MAX_TOKENS_MODE=fixed` 时生效          |
+| `SHOW_WORKERS`     | `4`                      | 并发 `/api/show` 请求数                      |
+| `OLLAMA_TIMEOUT`   | `60`                     | HTTP 超时（秒）                              |
 
-`MAX_TOKENS_MODE`:
+`MAX_TOKENS_MODE` 取值：
 
-- `auto` — `contextWindow / 4`, clamped to `[1024, 32768]`
-- `context` — the model's full context window
-- `fixed` — `MAX_TOKENS`
+- `auto` —— `contextWindow / 4`，并限制在 `[1024, 32768]` 区间内
+- `context` —— 使用模型的完整上下文窗口
+- `fixed` —— 固定为 `MAX_TOKENS`
 
-### Examples
+### 示例
 
-Remote Ollama:
+远程 Ollama：
 
 ```sh
 OLLAMA_HOST=http://192.168.1.100:11434 ./ollama2pi.py
 ```
 
-Fixed max tokens:
+固定 max tokens：
 
 ```sh
 MAX_TOKENS_MODE=fixed MAX_TOKENS=32768 ./ollama2pi.py
 ```
 
-Custom provider name:
+自定义 provider 名称：
 
 ```sh
 PI_OLLAMA_PROVIDER=my-ollama OLLAMA_HOST=http://localhost:9981 ./ollama2pi.py
 ```
 
-### Provider name warning
+### Provider 名称警告
 
-Do **not** rename the variable to `PI_PROVIDER`: the pi agent exports
-`PI_PROVIDER=<currently selected provider>` into every shell command, so a
-script run inside pi would silently pick up the session's provider name and
-possibly override a built-in provider of the same name. Always use
-`PI_OLLAMA_PROVIDER`.
+**不要**把变量名改回 `PI_PROVIDER`：pi agent 会在每条 shell 命令中导出
+`PI_PROVIDER=<当前选中的 provider>`。如果在 pi 会话中运行本脚本，就会静默地
+把 provider 写成会话当前的名称，甚至可能覆盖掉同名的内置 provider。
+请务必使用 `PI_OLLAMA_PROVIDER`。
 
-### pi compatibility
+### pi 兼容性
 
-Requires a pi version whose `models.json` schema validates
-`thinkingLevelMap` values as `string | null` (verified with pi 0.87.1).
-Works against Ollama's OpenAI-compatible endpoint (`/v1`), including the
-`developer` role and `reasoning_effort` parameter.
+要求 pi 版本的 `models.json` 校验支持 `thinkingLevelMap` 值为 `string | null`
+（已在 pi 0.87.1 上验证通过）。兼容 Ollama 的 OpenAI 接口（`/v1`），
+包括 `developer` 角色与 `reasoning_effort` 参数。
