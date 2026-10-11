@@ -415,6 +415,13 @@ func (s *session) clearView() {
 	if !s.clearScreen {
 		return
 	}
+	if runtime.GOOS == "windows" && isTerminalOutput(s.out) {
+		cmd := exec.Command("cmd", "/c", "cls")
+		cmd.Stdout = s.out
+		if err := cmd.Run(); err == nil {
+			return
+		}
+	}
 	fmt.Fprint(s.out, "\033[3J\033[H\033[2J")
 }
 

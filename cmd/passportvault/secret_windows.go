@@ -11,9 +11,11 @@ import (
 )
 
 const (
-	stdInputHandle  = ^uintptr(10) + 1
-	enableEchoInput = 0x0004
-	enableLineInput = 0x0002
+	stdInputHandle                  = ^uintptr(10) + 1
+	stdOutputHandle                 = ^uintptr(11) + 1
+	enableEchoInput                 = 0x0004
+	enableLineInput                 = 0x0002
+	enableVirtualTerminalProcessing = 0x0004
 )
 
 var (
@@ -22,6 +24,16 @@ var (
 	getConsoleMode = kernel32.NewProc("GetConsoleMode")
 	setConsoleMode = kernel32.NewProc("SetConsoleMode")
 )
+
+func init() {
+	handle, _, _ := getStdHandle.Call(stdOutputHandle)
+	if handle != 0 && handle != ^uintptr(0) {
+		var mode uint32
+		if r1, _, _ := getConsoleMode.Call(handle, uintptr(unsafe.Pointer(&mode))); r1 != 0 {
+			_, _, _ = setConsoleMode.Call(handle, uintptr(mode|enableVirtualTerminalProcessing))
+		}
+	}
+}
 
 func setTerminalRaw(in io.Reader) (func(), error) {
 	file, ok := in.(*os.File)
