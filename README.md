@@ -56,6 +56,7 @@ One-shot commands are still available for scripting:
 .\passportvault.exe edit github
 .\passportvault.exe delete github
 .\passportvault.exe change-password
+.\passportvault.exe version
 ```
 
 By default, the vault is stored as `passport-vault-go.dat` in the current directory.

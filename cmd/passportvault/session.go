@@ -90,7 +90,7 @@ func (s *session) loop() error {
 	for {
 		s.clearView()
 		fmt.Fprintln(s.out)
-		fmt.Fprintln(s.out, "PassportVault")
+		fmt.Fprintf(s.out, "PassportVault (%s)\n", versionString())
 		fmt.Fprintln(s.out, "1. List entries")
 		fmt.Fprintln(s.out, "2. Search entries")
 		fmt.Fprintln(s.out, "3. Add entry")

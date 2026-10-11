@@ -16,6 +16,7 @@ type appConfig struct {
 	keyFilePath string
 	passwordEnv string
 	reveal      bool
+	version     bool
 }
 
 var stdinReader = bufio.NewReader(os.Stdin)
@@ -31,6 +32,10 @@ func run(args []string) error {
 	cfg, command, rest, err := parseArgs(args)
 	if err != nil {
 		return err
+	}
+	if command == "version" {
+		printVersion()
+		return nil
 	}
 	password, err := readMasterPassword(cfg.passwordEnv)
 	if err != nil {
@@ -80,12 +85,20 @@ func parseArgs(args []string) (appConfig, string, []string, error) {
 	flags.StringVar(&cfg.keyFilePath, "key-file", "", "optional key file path")
 	flags.StringVar(&cfg.passwordEnv, "password-env", "PASSPORTVAULT_PASSWORD", "environment variable containing the master password")
 	flags.BoolVar(&cfg.reveal, "reveal", false, "reveal password for show command")
+	flags.BoolVar(&cfg.version, "version", false, "display version information")
+	flags.BoolVar(&cfg.version, "v", false, "display version information")
 	if err := flags.Parse(args); err != nil {
 		return cfg, "", nil, err
+	}
+	if cfg.version {
+		return cfg, "version", nil, nil
 	}
 	rest := flags.Args()
 	if len(rest) == 0 {
 		return cfg, "session", nil, nil
+	}
+	if rest[0] == "-v" || rest[0] == "--version" {
+		return cfg, "version", rest[1:], nil
 	}
 	return cfg, rest[0], rest[1:], nil
 }
@@ -360,10 +373,12 @@ func usageText() string {
   passportvault [flags] edit <name>
   passportvault [flags] delete <name>
   passportvault [flags] change-password
+  passportvault version
 
 Flags:
   -vault <path>          Vault file path, default passport-vault-go.dat
   -key-file <path>       Optional key file path
   -password-env <name>   Env var containing master password, default PASSPORTVAULT_PASSWORD
-  -reveal                Reveal password for show command`
+  -reveal                Reveal password for show command
+  -version               Show version information`
 }
