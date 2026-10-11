@@ -91,6 +91,9 @@ func parseArgs(args []string) (appConfig, string, []string, error) {
 }
 
 func commandInit(cfg appConfig, password string) error {
+	if err := validatePassword(password); err != nil {
+		return err
+	}
 	confirm, err := promptSecret("Confirm master password")
 	if err != nil {
 		return err
@@ -106,8 +109,11 @@ func commandInit(cfg appConfig, password string) error {
 }
 
 func commandAdd(cfg appConfig, password string) error {
-	v, err := loadExisting(cfg, password)
+	v, password, err := loadExistingWithRetry(cfg, password, os.Stdin, os.Stdout)
 	if err != nil {
+		if errors.Is(err, errCanceled) {
+			return nil
+		}
 		return err
 	}
 	entry, err := promptEntry(vault.Entry{})
@@ -125,8 +131,11 @@ func commandAdd(cfg appConfig, password string) error {
 }
 
 func commandList(cfg appConfig, password string) error {
-	v, err := loadExisting(cfg, password)
+	v, _, err := loadExistingWithRetry(cfg, password, os.Stdin, os.Stdout)
 	if err != nil {
+		if errors.Is(err, errCanceled) {
+			return nil
+		}
 		return err
 	}
 	for _, entry := range v.Search("") {
@@ -136,8 +145,11 @@ func commandList(cfg appConfig, password string) error {
 }
 
 func commandSearch(cfg appConfig, password string, query string) error {
-	v, err := loadExisting(cfg, password)
+	v, _, err := loadExistingWithRetry(cfg, password, os.Stdin, os.Stdout)
 	if err != nil {
+		if errors.Is(err, errCanceled) {
+			return nil
+		}
 		return err
 	}
 	for _, entry := range v.Search(query) {
@@ -147,8 +159,11 @@ func commandSearch(cfg appConfig, password string, query string) error {
 }
 
 func commandShow(cfg appConfig, password string, name string) error {
-	v, err := loadExisting(cfg, password)
+	v, _, err := loadExistingWithRetry(cfg, password, os.Stdin, os.Stdout)
 	if err != nil {
+		if errors.Is(err, errCanceled) {
+			return nil
+		}
 		return err
 	}
 	entry, ok := v.Find(name)
@@ -169,8 +184,11 @@ func commandShow(cfg appConfig, password string, name string) error {
 }
 
 func commandEdit(cfg appConfig, password string, name string) error {
-	v, err := loadExisting(cfg, password)
+	v, password, err := loadExistingWithRetry(cfg, password, os.Stdin, os.Stdout)
 	if err != nil {
+		if errors.Is(err, errCanceled) {
+			return nil
+		}
 		return err
 	}
 	current, ok := v.Find(name)
@@ -192,8 +210,11 @@ func commandEdit(cfg appConfig, password string, name string) error {
 }
 
 func commandDelete(cfg appConfig, password string, name string) error {
-	v, err := loadExisting(cfg, password)
+	v, password, err := loadExistingWithRetry(cfg, password, os.Stdin, os.Stdout)
 	if err != nil {
+		if errors.Is(err, errCanceled) {
+			return nil
+		}
 		return err
 	}
 	if !confirm("Delete " + name + "?") {
@@ -211,12 +232,18 @@ func commandDelete(cfg appConfig, password string, name string) error {
 }
 
 func commandChangePassword(cfg appConfig, password string) error {
-	v, err := loadExisting(cfg, password)
+	v, _, err := loadExistingWithRetry(cfg, password, os.Stdin, os.Stdout)
 	if err != nil {
+		if errors.Is(err, errCanceled) {
+			return nil
+		}
 		return err
 	}
 	next, err := promptSecret("New master password")
 	if err != nil {
+		return err
+	}
+	if err := validatePassword(next); err != nil {
 		return err
 	}
 	confirmNext, err := promptSecret("Confirm new master password")
@@ -271,6 +298,9 @@ func promptEntry(current vault.Entry) (vault.Entry, error) {
 func readMasterPassword(envName string) (string, error) {
 	if envName != "" {
 		if value := os.Getenv(envName); value != "" {
+			if err := validatePassword(value); err != nil {
+				return "", fmt.Errorf("%s: %w", envName, err)
+			}
 			return value, nil
 		}
 	}

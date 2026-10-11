@@ -3,20 +3,41 @@
 package main
 
 import (
-	"fmt"
+	"errors"
+	"io"
+	"os"
 	"os/exec"
 	"strings"
 )
 
-func readSecretLine(label string) (string, error) {
-	fmt.Print(label + ": ")
-	_ = exec.Command("stty", "-echo").Run()
-	defer exec.Command("stty", "echo").Run()
-	defer fmt.Println()
-
-	value, err := readInputLine()
-	if err != nil {
-		return "", err
+func setTerminalRaw(in io.Reader) (func(), error) {
+	file, ok := in.(*os.File)
+	if !ok {
+		return nil, errors.New("not an os.File")
 	}
-	return strings.TrimRight(value, "\r\n"), nil
+	info, err := file.Stat()
+	if err != nil || (info.Mode()&os.ModeCharDevice) == 0 {
+		return nil, errors.New("not a terminal device")
+	}
+
+	cmd := exec.Command("stty", "-g")
+	cmd.Stdin = file
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	state := strings.TrimSpace(string(out))
+
+	setCmd := exec.Command("stty", "-echo", "-icanon", "min", "1")
+	setCmd.Stdin = file
+	if err := setCmd.Run(); err != nil {
+		return nil, err
+	}
+
+	restore := func() {
+		restoreCmd := exec.Command("stty", state)
+		restoreCmd.Stdin = file
+		_ = restoreCmd.Run()
+	}
+	return restore, nil
 }

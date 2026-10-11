@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -14,10 +13,53 @@ import (
 	"passportvault/internal/vault"
 )
 
+var errCanceled = errors.New("canceled")
+
+func loadExistingWithRetry(cfg appConfig, password string, in io.Reader, out io.Writer) (*vault.Vault, string, error) {
+	for {
+		v, err := loadExisting(cfg, password)
+		if err == nil {
+			return v, password, nil
+		}
+		if !errors.Is(err, vault.ErrCouldNotUnlock) {
+			return nil, "", err
+		}
+
+		fmt.Fprintln(out, "Error: Incorrect master password.")
+
+		for {
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "1. Re-enter password")
+			fmt.Fprintln(out, "2. Exit")
+			fmt.Fprint(out, "Choose [1-2]: ")
+
+			choice, err := readLineFrom(in)
+			if err != nil {
+				return nil, "", vault.ErrCouldNotUnlock
+			}
+			choice = strings.TrimSpace(choice)
+			switch strings.ToLower(choice) {
+			case "1", "re-enter", "retry", "r", "":
+				nextPass, err := readSecret("Master password", in, out)
+				if err != nil {
+					return nil, "", err
+				}
+				password = nextPass
+				goto retry
+			case "2", "exit", "quit", "q":
+				return nil, "", errCanceled
+			default:
+				fmt.Fprintln(out, "Invalid choice.")
+			}
+		}
+	retry:
+	}
+}
+
 type session struct {
 	cfg      appConfig
 	password string
-	reader   *bufio.Reader
+	in       io.Reader
 	out      io.Writer
 	vault    *vault.Vault
 
@@ -25,14 +67,17 @@ type session struct {
 }
 
 func RunInteractiveSession(cfg appConfig, password string, input io.Reader, output io.Writer) error {
-	v, err := loadExisting(cfg, password)
+	v, pwd, err := loadExistingWithRetry(cfg, password, input, output)
 	if err != nil {
+		if errors.Is(err, errCanceled) {
+			return nil
+		}
 		return err
 	}
 	s := &session{
 		cfg:      cfg,
-		password: password,
-		reader:   bufio.NewReader(input),
+		password: pwd,
+		in:       input,
 		out:      output,
 		vault:    v,
 
@@ -249,6 +294,9 @@ func (s *session) changePassword() error {
 	if err != nil {
 		return err
 	}
+	if err := validatePassword(next); err != nil {
+		return err
+	}
 	confirmNext, err := s.promptSecret("Confirm new master password")
 	if err != nil {
 		return err
@@ -339,12 +387,12 @@ func (s *session) promptDefault(label string, current string) (string, error) {
 }
 
 func (s *session) promptSecret(label string) (string, error) {
-	return s.prompt(label)
+	return readSecret(label, s.in, s.out)
 }
 
 func (s *session) prompt(label string) (string, error) {
 	fmt.Fprint(s.out, label+": ")
-	value, err := s.reader.ReadString('\n')
+	value, err := readLineFrom(s.in)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}

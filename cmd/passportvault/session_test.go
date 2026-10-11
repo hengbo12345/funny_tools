@@ -95,3 +95,64 @@ func TestInteractiveSessionAddPersistsEntry(t *testing.T) {
 		t.Fatalf("saved entry mismatch: %#v", entry)
 	}
 }
+
+func TestInteractiveSessionWrongPasswordRetry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vault.dat")
+	if err := vault.SaveFile(path, vault.New(), "correctpass", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Initially wrong password provided
+	// 2. Output shows "Error: Incorrect master password" and prompts choice
+	// 3. Input "1" (re-enter)
+	// 4. Input "correctpass"
+	// 5. Input "8" (quit session)
+	input := strings.NewReader("1\ncorrectpass\n8\n")
+	output := bytes.NewBuffer(nil)
+	cfg := appConfig{vaultPath: path}
+
+	if err := RunInteractiveSession(cfg, "wrongpass", input, output); err != nil {
+		t.Fatalf("RunInteractiveSession failed: %v", err)
+	}
+
+	outText := output.String()
+	if !strings.Contains(outText, "Error: Incorrect master password.") {
+		t.Fatalf("output missing error message: %s", outText)
+	}
+	if !strings.Contains(outText, "1. Re-enter password") || !strings.Contains(outText, "2. Exit") {
+		t.Fatalf("output missing retry options: %s", outText)
+	}
+	if !strings.Contains(outText, "PassportVault") {
+		t.Fatalf("output missing session menu after unlocking: %s", outText)
+	}
+}
+
+func TestInteractiveSessionWrongPasswordExit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vault.dat")
+	if err := vault.SaveFile(path, vault.New(), "correctpass", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Initially wrong password provided
+	// 2. Output shows "Error: Incorrect master password" and prompts choice
+	// 3. Input "2" (exit)
+	input := strings.NewReader("2\n")
+	output := bytes.NewBuffer(nil)
+	cfg := appConfig{vaultPath: path}
+
+	// Choosing exit should return nil (clean exit) without entering session
+	if err := RunInteractiveSession(cfg, "wrongpass", input, output); err != nil {
+		t.Fatalf("RunInteractiveSession should return nil on exit, got: %v", err)
+	}
+
+	outText := output.String()
+	if !strings.Contains(outText, "Error: Incorrect master password.") {
+		t.Fatalf("output missing error message: %s", outText)
+	}
+	if strings.Contains(outText, "PassportVault") {
+		t.Fatalf("session should not have started on exit: %s", outText)
+	}
+}
+
