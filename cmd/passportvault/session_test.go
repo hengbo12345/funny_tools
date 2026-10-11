@@ -156,3 +156,39 @@ func TestInteractiveSessionWrongPasswordExit(t *testing.T) {
 	}
 }
 
+func TestInteractiveSessionShowEntryRevealAndHide(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vault.dat")
+	v := vault.New()
+	if err := v.Add(vault.Entry{Name: "server", Username: "root", Password: "supersecretpassword"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := vault.SaveFile(path, v, "master", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1: list entries
+	// 1: open entry 1
+	// r: reveal password
+	// h: hide password
+	// enter: back to list
+	// enter: back to menu
+	// 8: quit
+	input := strings.NewReader("1\n1\nr\nh\n\n\n8\n")
+	output := bytes.NewBuffer(nil)
+	cfg := appConfig{vaultPath: path}
+
+	if err := RunInteractiveSession(cfg, "master", input, output); err != nil {
+		t.Fatal(err)
+	}
+
+	text := output.String()
+	if !strings.Contains(text, "Password: supersecretpassword") {
+		t.Fatalf("output missing revealed plaintext password: %s", text)
+	}
+	if !strings.Contains(text, "[H]ide") {
+		t.Fatalf("output missing [H]ide prompt when revealed: %s", text)
+	}
+}
+
+

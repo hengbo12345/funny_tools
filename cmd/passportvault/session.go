@@ -57,11 +57,12 @@ func loadExistingWithRetry(cfg appConfig, password string, in io.Reader, out io.
 }
 
 type session struct {
-	cfg      appConfig
-	password string
-	in       io.Reader
-	out      io.Writer
-	vault    *vault.Vault
+	cfg       appConfig
+	password  string
+	in        io.Reader
+	out       io.Writer
+	vault     *vault.Vault
+	statusMsg string
 
 	clearScreen bool
 }
@@ -91,6 +92,10 @@ func (s *session) loop() error {
 		s.clearView()
 		fmt.Fprintln(s.out)
 		fmt.Fprintf(s.out, "PassportVault (%s)\n", versionString())
+		if s.statusMsg != "" {
+			fmt.Fprintln(s.out, s.statusMsg)
+			s.statusMsg = ""
+		}
 		fmt.Fprintln(s.out, "1. List entries")
 		fmt.Fprintln(s.out, "2. Search entries")
 		fmt.Fprintln(s.out, "3. Add entry")
@@ -135,6 +140,7 @@ func (s *session) loop() error {
 		case "8", "quit", "q", "exit":
 			return nil
 		default:
+			s.statusMsg = "Invalid choice."
 			fmt.Fprintln(s.out, "Invalid choice.")
 		}
 	}
@@ -183,7 +189,8 @@ func (s *session) addEntry() error {
 	if err := s.save(); err != nil {
 		return err
 	}
-	fmt.Fprintln(s.out, "Entry added:", entry.Name)
+	s.statusMsg = "Entry added: " + entry.Name
+	fmt.Fprintln(s.out, s.statusMsg)
 	return nil
 }
 
@@ -196,15 +203,30 @@ func (s *session) viewEntryByName() error {
 }
 
 func (s *session) showEntry(entry vault.Entry) error {
+	revealed := false
+	statusMsg := ""
 	for {
 		s.clearView()
 		fmt.Fprintln(s.out, "Name:", entry.Name)
 		fmt.Fprintln(s.out, "Username:", entry.Username)
-		fmt.Fprintln(s.out, "Password: ********")
+		if revealed {
+			fmt.Fprintln(s.out, "Password:", entry.Password)
+		} else {
+			fmt.Fprintln(s.out, "Password: ********")
+		}
 		if entry.Notes != "" {
 			fmt.Fprintln(s.out, "Notes:", entry.Notes)
 		}
-		action, err := s.prompt("[R]eveal  [C]opy password  [E]dit  [D]elete  Enter=back")
+		if statusMsg != "" {
+			fmt.Fprintln(s.out)
+			fmt.Fprintln(s.out, statusMsg)
+			statusMsg = ""
+		}
+		actionPrompt := "[R]eveal  [C]opy password  [E]dit  [D]elete  Enter=back"
+		if revealed {
+			actionPrompt = "[H]ide  [C]opy password  [E]dit  [D]elete  Enter=back"
+		}
+		action, err := s.prompt(actionPrompt)
 		if err != nil {
 			return err
 		}
@@ -212,12 +234,14 @@ func (s *session) showEntry(entry vault.Entry) error {
 		case "":
 			return nil
 		case "r", "reveal":
-			fmt.Fprintln(s.out, "Password:", entry.Password)
+			revealed = !revealed
+		case "h", "hide":
+			revealed = false
 		case "c", "copy":
 			if err := copyToClipboard(entry.Password); err != nil {
-				fmt.Fprintln(s.out, "Clipboard unavailable:", err)
+				statusMsg = fmt.Sprintf("Clipboard unavailable: %v", err)
 			} else {
-				fmt.Fprintln(s.out, "Password copied to clipboard.")
+				statusMsg = "Password copied to clipboard."
 			}
 		case "e", "edit":
 			if err := s.editEntry(entry.Name); err != nil {
@@ -234,7 +258,7 @@ func (s *session) showEntry(entry vault.Entry) error {
 			}
 			return nil
 		default:
-			fmt.Fprintln(s.out, "Invalid choice.")
+			statusMsg = "Invalid choice."
 		}
 	}
 }
@@ -262,7 +286,8 @@ func (s *session) editEntry(name string) error {
 	if err := s.save(); err != nil {
 		return err
 	}
-	fmt.Fprintln(s.out, "Entry updated:", replacement.Name)
+	s.statusMsg = "Entry updated: " + replacement.Name
+	fmt.Fprintln(s.out, s.statusMsg)
 	return nil
 }
 
@@ -276,7 +301,8 @@ func (s *session) deleteEntryByName() error {
 
 func (s *session) deleteEntry(name string) error {
 	if !s.confirm("Delete " + name + "?") {
-		fmt.Fprintln(s.out, "Canceled.")
+		s.statusMsg = "Canceled."
+		fmt.Fprintln(s.out, s.statusMsg)
 		return nil
 	}
 	if err := s.vault.Remove(name); err != nil {
@@ -285,7 +311,8 @@ func (s *session) deleteEntry(name string) error {
 	if err := s.save(); err != nil {
 		return err
 	}
-	fmt.Fprintln(s.out, "Entry deleted:", name)
+	s.statusMsg = "Entry deleted: " + name
+	fmt.Fprintln(s.out, s.statusMsg)
 	return nil
 }
 
@@ -308,7 +335,8 @@ func (s *session) changePassword() error {
 	if err := s.save(); err != nil {
 		return err
 	}
-	fmt.Fprintln(s.out, "Master password changed.")
+	s.statusMsg = "Master password changed."
+	fmt.Fprintln(s.out, s.statusMsg)
 	return nil
 }
 
